@@ -129,8 +129,7 @@ def opus_report(folder_data, bestillingsnavn, folder_data_session, session):
     session.findById("wnd[1]/tbar[0]/btn[0]").press()
     time.sleep(0.5)
 
-    #  Press Back 3 times to go to "Vis personalestamdata", where data from the downloaded
-    #  report will we pasted in.
+    # Press Back 3 times to go to "Vis personalestamdata", where data from the downloaded report, will we pasted in.
 
     for _ in range(3):
         session.findById("wnd[0]/tbar[0]/btn[3]").press()
@@ -389,14 +388,6 @@ def er_der_pension_paa_maanedsloen(bestillingsnavn, folder_data_session, df, ses
     df["Manummer"] = df["Manummer"].str.strip()
     df_filtered_dict = {k.strip(): v for k, v in df_filtered_dict.items()}
 
-    """
-    for manummer, df_iter in df_filtered_dict.items():
-        if not df_iter.empty:
-            df.loc[
-                df["Manummer"] == manummer, "Note"
-            ] = "Medarbejder har maanedsloen med pension pr"
-    """
-
     for manummer, df_iter in df_filtered_dict.items():
         if not df_iter.empty:
             df.loc[df["Manummer"] == manummer, "Note"] = "Medarbejder har maanedsloen med pension pr " + df_iter[
@@ -408,6 +399,7 @@ def er_der_pension_paa_maanedsloen(bestillingsnavn, folder_data_session, df, ses
 df = er_der_pension_paa_maanedsloen(bestillingsnavn, folder_data_session, df, session)
 
 
+#
 def get_report_from_ri():
     # initialize
     # hostname = socket.gethostname()
@@ -455,9 +447,9 @@ def get_report_from_ri():
                 ).fill(date_interval)
 
                 # cpr nummer
-                # rapport_variabelinput.frame_locator(
-                #    'iframe[name="iframe_Roundtrip_9223372036563636042"]'
-                # ).locator("#DLG_VARIABLE_vsc_cvl_table_cid2x6").fill(cpr)
+                rapport_variabelinput.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(
+                    "#DLG_VARIABLE_vsc_cvl_table_cid2x6"
+                ).fill(cpr)
 
             except Exception as e:
                 logger.error("An error occurred during page interactions", exc_info=True)
