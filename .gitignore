@@ -1,0 +1,9 @@
+data/
+docs/
+logs/
+temp/
+.ipynb_checkpoints/
+.vscode/
+.pytest_cache/
+**/__pycache__/
+.env
