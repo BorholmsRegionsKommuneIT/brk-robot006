@@ -33,6 +33,9 @@ folder_data_session = Path(folder_data / bestillingsnavn)
 session = login.start_opus(pam_path, robot_name, sapshcut_path)
 
 
+# ---------------------------------------------------------------------------- #
+#                                Rapport trækkes                               #
+# ---------------------------------------------------------------------------- #
 def download_report(folder_data, bestillingsnavn, folder_data_session, session) -> None:
     """
     This function downloads a report from OPUS and saves it in a folder named after the current date and time.
@@ -178,6 +181,10 @@ def read_report(folder_data_session: Path, bestillingsnavn: str) -> pd.core.fram
 
 df = read_report(folder_data_session=folder_data_session, bestillingsnavn=bestillingsnavn)
 
+# ----------------------------------- TEMP ----------------------------------- #
+df = df[:20]
+# --------------------------------- END TEMP --------------------------------- #
+
 
 def validate_dataframe_col_number(dataframe, col_number, dataframe_name):
     cols = dataframe.shape[1]
@@ -191,31 +198,53 @@ def validate_dataframe_col_number(dataframe, col_number, dataframe_name):
 
 validate_dataframe_col_number(df, 15, 'df')
 
+# Creating the result DataFrame, which will contain all Boolean vectors corresponding to the questions in the documentation flowchart
+result = df[['manummer']].copy()
 
-def er_medarbejder_oprettet_med_pension(manummer_series: pd.core.series.Series) -> pd.Series.bool:
+
+# ---------------------------------------------------------------------------- #
+#                      Har medarbejder pension i forvejen                      #
+# ---------------------------------------------------------------------------- #
+def har_medarbejder_pension_i_forvejen(df: pd.DataFrame, result: pd.DataFrame, manummer_column: str) -> pd.DataFrame:
     """
-    er_medarbejder_oprettet_med_pension(df['manummer'])
-    Returns a boolean series with True if the employee is created with pension.
+    Adds a boolean column to the 'result' DataFrame indicating if the employee,
+    identified by the 'manummer' column, is created with pension. This is based
+    on conditions in the provided DataFrame 'df'.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing employee data with 'pensberegnkode', 'samletpct', and 'manummer' columns.
+    result (pd.DataFrame): The DataFrame to which the new column will be added.
+    manummer_column (str): The name of the column in both DataFrames that contains employee IDs.
+
+    Returns:
+    pd.DataFrame: The 'result' DataFrame with an added boolean column 'har_pension'.
     """
-    oprettet_med_pension = (df["pensberegnkode"] == "1") & (df["samletpct"] > 0.00)
-    return oprettet_med_pension
+    # Ensure both DataFrames contain the manummer column
+    if manummer_column not in df.columns or manummer_column not in result.columns:
+        raise ValueError(f"The DataFrame must contain the '{manummer_column}' column.")
+
+    # Check if required columns exist in df
+    if 'pensberegnkode' in df.columns and 'samletpct' in df.columns:
+        # Create a temporary DataFrame for the merge operation
+        temp_df = df[[manummer_column, 'pensberegnkode', 'samletpct']].copy()
+        temp_df['har_pension'] = (temp_df["pensberegnkode"] == "1") & (temp_df["samletpct"] > 0.00)
+        temp_df['har_pension_0_pct'] = (temp_df["pensberegnkode"] == "1") & (temp_df["samletpct"] == 0.00)
+
+        # Merge the result DataFrame with the calculated column from the temporary DataFrame
+        result = result.merge(temp_df[[manummer_column, 'har_pension']], on=manummer_column, how='left')
+        result = result.merge(temp_df[[manummer_column, 'har_pension_0_pct']], on=manummer_column, how='left')
+    else:
+        raise ValueError("The DataFrame must contain 'pensberegnkode' and 'samletpct' columns.")
+
+    return result
 
 
-oprettet_med_pension = er_medarbejder_oprettet_med_pension(df['manummer'])
+result = har_medarbejder_pension_i_forvejen(df, result, 'manummer')
 
 
-def er_medarbejder_oprettet_med_0_pct_pension(manummer_series: pd.core.series.Series) -> pd.Series.bool:
-    """
-    er_medarbejder_oprettet_med_0_pct_pension(df['Manummer'])
-    Returns a boolean series with True if the employee is created with 0 pct pension.
-    """
-    oprettet_med_0_pct_pension = (df["pensberegnkode"] == "1") & (df["samletpct"] == 0.00)
-    return oprettet_med_0_pct_pension
-
-
-oprettet_med_0_pct_pension = er_medarbejder_oprettet_med_0_pct_pension(df['manummer'])
-
-
+# ---------------------------------------------------------------------------- #
+#                            Er medarbejder under 21                           #
+# ---------------------------------------------------------------------------- #
 def _calculate_age(fodselsdag_str):
     fodselsdag = datetime.datetime.strptime(fodselsdag_str, "%d%m%y")
     today = datetime.datetime.today()
@@ -226,19 +255,44 @@ def _calculate_age(fodselsdag_str):
     return age
 
 
-def er_medarbejder_under_21(manummer_series: pd.core.series.Series) -> bool:
-    df["fodselsdato"] = df["cprnr"].str[0:6]
+# Use new approach
+def er_medarbejder_under_21(df: pd.DataFrame, result: pd.DataFrame, manummer_column: str) -> pd.DataFrame:
+    """
+    Adds a boolean column to the 'result' DataFrame indicating if the employee,
+    identified by the 'manummer' column, is under the age of 21.
 
-    df["alder"] = df["fodselsdato"].apply(_calculate_age)
+    Parameters:
+    df (pd.DataFrame): The DataFrame containing employee data with 'cprnr' column.
+    result (pd.DataFrame): The DataFrame to which the new column will be added.
+    manummer_column (str): The name of the column in both DataFrames that contains employee IDs.
 
-    max_alder = 21
+    Returns:
+    pd.DataFrame: The 'result' DataFrame with an added boolean column 'er_under_21'.
+    """
+    # Create a temporary DataFrame to avoid modifying the original df
+    temp_df = df[[manummer_column, 'cprnr']].copy()
 
-    er_under_21 = df["alder"] < max_alder
+    # Convert CPR number to birthdate and calculate age in the temp_df
+    temp_df["fodselsdato"] = temp_df["cprnr"].str[0:6]
+    temp_df["alder"] = temp_df["fodselsdato"].apply(_calculate_age)  # Assuming _calculate_age is a predefined function
 
-    return er_under_21
+    # Add 'er_under_21' column to temp_df
+    temp_df['er_under_21'] = temp_df["alder"] < 21
+
+    # Merge the result DataFrame with the calculated column from temp_df
+    result = result.merge(temp_df[[manummer_column, 'er_under_21']], on=manummer_column, how='left')
+
+    return result
 
 
-er_under_21 = er_medarbejder_under_21(df['manummer'])
+result = er_medarbejder_under_21(df, result, 'manummer')
+
+
+# ---------------------------------------------------------------------------- #
+#               Er medarbejder oprettet med pension på månedsløn               #
+# ---------------------------------------------------------------------------- #
+
+# ----------- Download individuelle ansættelsesforløb som csv filer ---------- #
 
 
 def download_single_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str, session) -> None:
@@ -287,9 +341,23 @@ def download_single_ansforhold(manummer: str, folder_data_session: Path, bestill
 
 
 manummer_list = (df["manummer"]).str.strip().tolist()
-manummer_list = manummer_list[:10]
 
 
+def download_all_ansforhold(manummer_list: list, folder_data_session: Path, bestillingsnavn: str, session) -> None:
+    for manummer in manummer_list:
+        try:
+            # Download data for each manummer
+            download_single_ansforhold(manummer, folder_data_session, bestillingsnavn, session)
+        except Exception as e:
+            logger.error(f"Error downloading ansforhold for manummer {manummer}: {e}")
+            # Continue with the next iteration
+            continue
+
+
+download_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session)
+
+
+# ------------------ Funktion til at læse ansættelsesforløb ------------------ #
 def read_single_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str) -> pd.DataFrame:
     try:
         data_types = defaultdict(lambda: "str")
@@ -316,6 +384,7 @@ def read_single_ansforhold(manummer: str, folder_data_session: Path, bestillings
         return pd.DataFrame()
 
 
+# ----------- Funktion til at filtrere et enkelt ansættelsesforløb ----------- #
 def filter_df_ansforhold(df_ansforhold) -> pd.DataFrame:
     try:
         df_filtered = df_ansforhold.loc[
@@ -334,6 +403,7 @@ def filter_df_ansforhold(df_ansforhold) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# --------- Funktion til at sortere og udvælge den ældste ansættelse --------- #
 def sort_df_ansforhold(df_ansforhold) -> pd.DataFrame:
     try:
         df_ansforhold["startdato"] = pd.to_datetime(df_ansforhold["startdato"], format="%d.%m.%Y")
@@ -348,35 +418,25 @@ def sort_df_ansforhold(df_ansforhold) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def download_all_ansforhold(manummer_list: list, folder_data_session: Path, bestillingsnavn: str, session) -> None:
-    for manummer in manummer_list:
-        try:
-            # Download data for each manummer
-            download_single_ansforhold(manummer, folder_data_session, bestillingsnavn, session)
-        except Exception as e:
-            logger.error(f"Error downloading ansforhold for manummer {manummer}: {e}")
-            # Continue with the next iteration
-            continue
-
-
-# Download data for each manummer
-download_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session)
-
-
-def process_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session) -> pd.DataFrame:
+# --- Kør de 3 funktioner (read, filter, sort) i et loop over alle manumre --- #
+# ---- Hvis medarbejder har en linje, svare det til en True value i result --- #
+def process_all_ansforhold(
+    df: pd.DataFrame,
+    result: pd.DataFrame,
+    manummer_list: list,
+    folder_data_session: Path,
+    bestillingsnavn: str,
+    manummer_column: str,
+) -> pd.DataFrame:
     """
     loops over manummer_list and runs all the single functions
     """
-    # global all_rows
-    all_rows = []  # List to store the single-row DataFrames
+    all_rows = []  # List to store the single-row DataFrames, mostly for debugging purposes
 
     for manummer in manummer_list:
         try:
             # Read and process the downloaded data
             df_ansforhold = read_single_ansforhold(manummer, folder_data_session, bestillingsnavn)
-
-            df_ansforhold_dict = {}
-            df_ansforhold_dict[manummer] = df_ansforhold
 
             validate_dataframe_col_number(df_ansforhold, 20, 'df_ansforhold')
 
@@ -388,18 +448,39 @@ def process_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, 
                 df_sorted = df_sorted.drop(df_sorted.columns[0], axis=1)
             all_rows.append(df_sorted)
 
+            # Create a temporary DataFrame for the merge operation
+            temp_df = df[[manummer_column]].copy()
+
+            # Append True or False to temp_df depending on if df_sorted has exactly one row
+            temp_df['oprettet_pension_maaned'] = len(df_sorted) == 1
+
         except Exception as e:
             logger.error(f"Error processing manummer {manummer}: {e}")
             # Continue with the next iteration
             continue
-
+    # Merge
+    result = pd.merge(result, temp_df[['manummer', 'oprettet_pension_maaned']], on='manummer', how='left')
     # Concatenate all single-row DataFrames into one DataFrame
-    oprettet_pension_maaned = pd.concat(all_rows, ignore_index=False)
-    return oprettet_pension_maaned
+    all_rows = pd.concat(all_rows, ignore_index=False)
+    return result
 
 
-oprettet_pension_maaned = process_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session)
+result = process_all_ansforhold(
+    df=df,
+    result=result,
+    manummer_list=manummer_list,
+    folder_data_session=folder_data_session,
+    bestillingsnavn=bestillingsnavn,
+    manummer_column='manummer',
+)
 
+# ---------------------------------------------------------------------------- #
+#                         Inspect data for correctness.                        #
+# ---------------------------------------------------------------------------- #
+
+# ---------------------------------------------------------------------------- #
+#                                 FEJL I RESULT                                #
+# ---------------------------------------------------------------------------- #
 
 # oprettet_pension_maaned.to_csv(
 #    path_or_buf=Path(folder_data_session / "oprettet_pension_maaned.csv"), index=False, encoding='utf-8'
