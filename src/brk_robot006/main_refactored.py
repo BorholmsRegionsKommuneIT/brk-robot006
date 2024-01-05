@@ -12,6 +12,7 @@ from collections import defaultdict  # to dtype all vars at once
 from pathlib import Path
 
 import brk_rpa_utils as login
+import numpy as np
 import pandas as pd
 from loguru import logger
 from playwright.sync_api import sync_playwright
@@ -32,7 +33,7 @@ folder_data_session = Path(folder_data / bestillingsnavn)
 session = login.start_opus(pam_path, robot_name, sapshcut_path)
 
 
-def download_rapport(folder_data, bestillingsnavn, folder_data_session, session) -> None:
+def download_report(folder_data, bestillingsnavn, folder_data_session, session) -> None:
     """
     This function downloads a report from OPUS and saves it in a folder named after the current date and time.
     """
@@ -128,7 +129,7 @@ def download_rapport(folder_data, bestillingsnavn, folder_data_session, session)
     time.sleep(0.5)
 
 
-download_rapport(folder_data, bestillingsnavn, folder_data_session, session)
+download_report(folder_data, bestillingsnavn, folder_data_session, session)
 
 
 def return_to_start_view() -> None:
@@ -145,58 +146,62 @@ def return_to_start_view() -> None:
 return_to_start_view()
 
 
-def import_rapport(folder_data_session: Path, bestillingsnavn: str) -> pd.core.frame.DataFrame:
-    column_names = [
-        "Startdato",
-        "Stopdato",
-        "Manummer",
-        "Sagsbehandler",
-        "Orgkort",
-        "Orgbetegn",
-        "Cpr",
-        "Navn",
-        "Ansdato",
-        "Ansforhold",
-        "Makreds",
-        "Lonkls",
-        "Pensberegnkode",
-        "Penskassenr",
-        "Samletpct",
-    ]
-    data_types = defaultdict(lambda: "str")
+def read_report(folder_data_session: Path, bestillingsnavn: str) -> pd.core.frame.DataFrame:
+    try:
+        data_types = defaultdict(lambda: "str")
 
-    #  Read the report into a dataframe
-    report_path = folder_data_session / f"{bestillingsnavn}.csv"
+        #  Read the report into a dataframe
+        report_path = folder_data_session / f"{bestillingsnavn}.csv"
 
-    df = pd.read_csv(
-        filepath_or_buffer=report_path,
-        sep="\t",
-        header=None,
-        names=column_names,
-        encoding="windows-1252",
-        dtype=data_types,
-        skiprows=15,
-        usecols=[1, *range(3, 17)],
-    )
+        df = pd.read_csv(
+            filepath_or_buffer=report_path,
+            sep="\t",
+            header=None,
+            encoding="windows-1252",
+            skiprows=12,
+            dtype=data_types,
+            # usecols=[1, *range(3, 17)],
+        )
+        df.columns = df.iloc[0]
+        df = df.drop(df.index[0])
+        df = df.dropna(axis=1, how='all')
+        df.columns = df.columns.str.lower().str.replace('[-.,1æøå ]', '', regex=True)
+        df["samletpct"] = df["samletpct"].str.replace(",", ".").astype(float)
+        logger.info(f"Successfully read ansforhold data from {report_path}")
+        return df
 
-    df["Samletpct"] = df["Samletpct"].str.replace(",", ".").astype(float)
-
-    return df
+    except Exception as e:
+        # Optionally log the error or handle it in a way that's suitable for your application
+        logger.error(f"An error occurred: {e}")
+        return pd.DataFrame()
 
 
-df = import_rapport(folder_data_session=folder_data_session, bestillingsnavn=bestillingsnavn)
+df = read_report(folder_data_session=folder_data_session, bestillingsnavn=bestillingsnavn)
+
+
+def validate_dataframe_col_number(dataframe, col_number, dataframe_name):
+    cols = dataframe.shape[1]
+    try:
+        if cols != col_number:
+            raise ValueError(f"{dataframe_name} has wrong number of columns: expected {col_number}, found {cols}")
+        logger.info(f"Validation successful: {dataframe_name} has the expected number of columns: {col_number}")
+    except ValueError as e:
+        logger.error(f"Validation failed: {e}")
+
+
+validate_dataframe_col_number(df, 15, 'df')
 
 
 def er_medarbejder_oprettet_med_pension(manummer_series: pd.core.series.Series) -> pd.Series.bool:
     """
-    er_medarbejder_oprettet_med_pension(df['Manummer'])
+    er_medarbejder_oprettet_med_pension(df['manummer'])
     Returns a boolean series with True if the employee is created with pension.
     """
-    oprettet_med_pension = (df["Pensberegnkode"] == "1") & (df["Samletpct"] > 0.00)
+    oprettet_med_pension = (df["pensberegnkode"] == "1") & (df["samletpct"] > 0.00)
     return oprettet_med_pension
 
 
-oprettet_med_pension = er_medarbejder_oprettet_med_pension(df['Manummer'])
+oprettet_med_pension = er_medarbejder_oprettet_med_pension(df['manummer'])
 
 
 def er_medarbejder_oprettet_med_0_pct_pension(manummer_series: pd.core.series.Series) -> pd.Series.bool:
@@ -204,11 +209,11 @@ def er_medarbejder_oprettet_med_0_pct_pension(manummer_series: pd.core.series.Se
     er_medarbejder_oprettet_med_0_pct_pension(df['Manummer'])
     Returns a boolean series with True if the employee is created with 0 pct pension.
     """
-    oprettet_med_0_pct_pension = (df["Pensberegnkode"] == "1") & (df["Samletpct"] == 0.00)
+    oprettet_med_0_pct_pension = (df["pensberegnkode"] == "1") & (df["samletpct"] == 0.00)
     return oprettet_med_0_pct_pension
 
 
-oprettet_med_0_pct_pension = er_medarbejder_oprettet_med_0_pct_pension(df['Manummer'])
+oprettet_med_0_pct_pension = er_medarbejder_oprettet_med_0_pct_pension(df['manummer'])
 
 
 def _calculate_age(fodselsdag_str):
@@ -222,121 +227,180 @@ def _calculate_age(fodselsdag_str):
 
 
 def er_medarbejder_under_21(manummer_series: pd.core.series.Series) -> bool:
-    df["Fodselsdato"] = df["Cpr"].str[0:6]
+    df["fodselsdato"] = df["cprnr"].str[0:6]
 
-    df["Alder"] = df["Fodselsdato"].apply(_calculate_age)
+    df["alder"] = df["fodselsdato"].apply(_calculate_age)
 
     max_alder = 21
 
-    er_under_21 = df["Alder"] < max_alder
+    er_under_21 = df["alder"] < max_alder
 
     return er_under_21
 
 
-er_under_21 = er_medarbejder_under_21(df['Manummer'])
+er_under_21 = er_medarbejder_under_21(df['manummer'])
 
 
-def _download_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str, session):
+def download_single_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str, session) -> None:
     """
-    function to download ansaettelsesforloeb for a given manummer
+    Function to download ansaettelsesforloeb for a given manummer.
     """
-    session.findById("wnd[0]/usr/subSUBSCR_PERNR:SAPMP50A:0110/ctxtRP50G-PERNR").text = manummer
-    # press ansaettelsesforloeb
-    session.findById("wnd[0]/tbar[1]/btn[31]").press()
-    ## Gem liste i fil
-    # Click on lokal fil
-    session.findById("wnd[0]/tbar[1]/btn[45]").press()
-    # choose regneark
-    session.findById("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]").select()
-    session.findById(
-        "wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]"
-    ).setFocus()
-    # click checkmark
-    session.findById("wnd[1]/tbar[0]/btn[0]").press()
-    time.sleep(0.5)
-    # Save in folder_data_session
-    # dir
-    session.findById("wnd[1]/usr/ctxtDY_PATH").text = str(folder_data_session)
-    # Filename
-    filename = bestillingsnavn + "_" + manummer + ".csv"
-    session.findById("wnd[1]/usr/ctxtDY_FILENAME").text = str(filename)
-    # generer
-    session.findById("wnd[1]/usr/ctxtDY_FILENAME").caretPosition = 15
-    session.findById("wnd[1]/tbar[0]/btn[0]").press()
-    # click back to "Vis personalestamdata"
-    session.findById("wnd[0]/tbar[0]/btn[3]").press()
+    try:
+        # Enter manummer
+        session.findById("wnd[0]/usr/subSUBSCR_PERNR:SAPMP50A:0110/ctxtRP50G-PERNR").text = manummer
+
+        # Press ansaettelsesforloeb
+        session.findById("wnd[0]/tbar[1]/btn[31]").press()
+
+        # Click on lokal fil
+        session.findById("wnd[0]/tbar[1]/btn[45]").press()
+
+        # Choose regneark
+        session.findById(
+            "wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]"
+        ).select()
+        session.findById(
+            "wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]"
+        ).setFocus()
+
+        # Click checkmark
+        session.findById("wnd[1]/tbar[0]/btn[0]").press()
+
+        time.sleep(0.5)  # Waiting for the process to complete
+
+        # Insert folder_data_session in Directory field
+        session.findById("wnd[1]/usr/ctxtDY_PATH").text = str(folder_data_session)
+        # define filename var
+        filename = f"{bestillingsnavn}_{manummer}.csv"
+        # Insert filename into Filnavn
+        session.findById("wnd[1]/usr/ctxtDY_FILENAME").text = str(filename)
+
+        # Click Erstat. Not generer in case the file exist. Nor Udvid it will append to file.
+        session.findById("wnd[1]/tbar[0]/btn[11]").press()
+
+        # Click back to "Vis personalestamdata"
+        session.findById("wnd[0]/tbar[0]/btn[3]").press()
+
+    except Exception as e:
+        # Handle any exception that might occur and return a meaningful message
+        logger.error(f"An error occurred: {e}")
 
 
-manummer_list = (df["Manummer"]).str.strip().tolist()
-manummer_list = manummer_list[:1]
+manummer_list = (df["manummer"]).str.strip().tolist()
+manummer_list = manummer_list[:10]
 
 
-def download_ansforhold_for_all_medarbejdere(manummer_list: list) -> None:
+def read_single_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str) -> pd.DataFrame:
+    try:
+        data_types = defaultdict(lambda: "str")
+
+        path_csv_ansforhold = Path(folder_data_session / f"{bestillingsnavn}_{manummer}.csv")
+
+        df_ansforhold = pd.read_csv(
+            filepath_or_buffer=path_csv_ansforhold,
+            sep="\t",
+            header=None,
+            encoding="windows-1252",
+            skiprows=[0, 1, 2, 3, 5],
+            dtype=data_types,
+        )
+        df_ansforhold.columns = df_ansforhold.iloc[0]
+        df_ansforhold = df_ansforhold.drop(df_ansforhold.index[0])
+        df_ansforhold.columns = df_ansforhold.columns.str.lower().str.replace('[-.,1æøå ]', '', regex=True)
+        logger.info(f"Successfully read ansforhold data from {path_csv_ansforhold}")
+        return df_ansforhold
+
+    except Exception as e:
+        # Optionally log the error or handle it in a way that's suitable for your application
+        logger.error(f"An error occurred: {e}")
+        return pd.DataFrame()
+
+
+def filter_df_ansforhold(df_ansforhold) -> pd.DataFrame:
+    try:
+        df_filtered = df_ansforhold.loc[
+            (df_ansforhold["ansfh"] == "01")
+            & (df_ansforhold["penskasn"] != "30201")
+            & (df_ansforhold["penskasn"] != "30399")
+            & (df_ansforhold["penskasn"] != "30210")
+            & (df_ansforhold["penskasn"] != "39999")
+            & (df_ansforhold["penskasn"].notna())
+        ].copy()
+
+        return df_filtered
+
+    except Exception as e:
+        logger.error(f"Error in filter_df_ansforhold: {e}")
+        return pd.DataFrame()
+
+
+def sort_df_ansforhold(df_ansforhold) -> pd.DataFrame:
+    try:
+        df_ansforhold["startdato"] = pd.to_datetime(df_ansforhold["startdato"], format="%d.%m.%Y")
+        df_sorted = df_ansforhold.sort_values(by=["startdato"])
+
+        if not df_sorted.empty:
+            df_sorted = df_sorted.iloc[[0]]
+        return df_sorted
+
+    except Exception as e:
+        logger.error(f"Error in sort_df_ansforhold: {e}")
+        return pd.DataFrame()
+
+
+def download_all_ansforhold(manummer_list: list, folder_data_session: Path, bestillingsnavn: str, session) -> None:
     for manummer in manummer_list:
-        _download_ansforhold(manummer)
-        time.sleep(1)
+        try:
+            # Download data for each manummer
+            download_single_ansforhold(manummer, folder_data_session, bestillingsnavn, session)
+        except Exception as e:
+            logger.error(f"Error downloading ansforhold for manummer {manummer}: {e}")
+            # Continue with the next iteration
+            continue
 
 
-download_ansforhold_for_all_medarbejdere(manummer_list)
+# Download data for each manummer
+download_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session)
 
 
-def read_ansforhold(folder_data_session: Path, manummer: str, bestillingsnavn: str) -> pd.core.frame.DataFrame:
-    column_names_df_manummer = [
-        "Empty",
-        "Manummer",
-        "Startdato",
-        "Stopdato",
-        "Reduktionskode",
-        "Stilling",
-        "Aktivitetsorgsbet",
-        "Orgpla",
-        "Ansforhold",
-        "Medbkreds",
-        "Taeller",
-        "Lonkls",
-        "Lonklbet",
-        "Erfadato",
-        "Lonancdato",
-        "Penskassenr",
-        "Tiltkon",
-        "Datftilt",
-        "Grundltrin",
-        "Berlontrin",
-        "Betaktart",
-    ]
+def process_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session) -> pd.DataFrame:
+    """
+    loops over manummer_list and runs all the single functions
+    """
+    # global all_rows
+    all_rows = []  # List to store the single-row DataFrames
 
-    data_types = defaultdict(lambda: "str")
+    for manummer in manummer_list:
+        try:
+            # Read and process the downloaded data
+            df_ansforhold = read_single_ansforhold(manummer, folder_data_session, bestillingsnavn)
 
-    report_ans_forlob = folder_data_session / f"{bestillingsnavn}_{manummer}.csv"
+            df_ansforhold_dict = {}
+            df_ansforhold_dict[manummer] = df_ansforhold
 
-    df_ansforhold = pd.read_csv(
-        filepath_or_buffer=report_ans_forlob,
-        sep="\t",
-        header=None,
-        names=column_names_df_manummer,
-        encoding="windows-1252",
-        skiprows=5,
-        dtype=data_types,
-    )
+            validate_dataframe_col_number(df_ansforhold, 20, 'df_ansforhold')
 
-    df_ansforhold.drop("Empty", axis=1, inplace=True)
+            # Filter and sort the DataFrame
+            df_filtered = filter_df_ansforhold(df_ansforhold)
+            df_sorted = sort_df_ansforhold(df_filtered)
+            # Append the sorted DataFrame to the list
+            if df_sorted.columns[0] is np.nan:
+                df_sorted = df_sorted.drop(df_sorted.columns[0], axis=1)
+            all_rows.append(df_sorted)
 
-    return df_ansforhold
+        except Exception as e:
+            logger.error(f"Error processing manummer {manummer}: {e}")
+            # Continue with the next iteration
+            continue
+
+    # Concatenate all single-row DataFrames into one DataFrame
+    oprettet_pension_maaned = pd.concat(all_rows, ignore_index=False)
+    return oprettet_pension_maaned
 
 
-def filter_df_ansforhold(df):
-    pass
+oprettet_pension_maaned = process_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session)
 
 
-# Filter data frames in df_manummer_list,
-# so Ansforhold == 01 AND Penskassenr is different from NaN.
-# then find the row with earliest Startdato
-
-for manummer in manummer_list:
-    read_ansforhold(folder_data_session, manummer, bestillingsnavn)
-    # filter_df_ansforhold()
-    # sort()
-
-
-def er_medarbejder_oprettet_med_pension_paa_maanedsloen(manummer) -> bool:
-    pass
+# oprettet_pension_maaned.to_csv(
+#    path_or_buf=Path(folder_data_session / "oprettet_pension_maaned.csv"), index=False, encoding='utf-8'
+# )

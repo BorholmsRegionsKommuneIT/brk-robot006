@@ -1,3 +1,6 @@
+# fmt: off
+# type: ignore
+
 """
 Robot006
 """

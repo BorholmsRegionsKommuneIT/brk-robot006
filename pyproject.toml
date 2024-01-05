@@ -24,7 +24,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["brk-rpa-utils", "pandas", "loguru", "playwright", "pywin32", "python-dotenv"]
+dependencies = ["brk-rpa-utils", "pandas", "numpy", "loguru", "playwright", "pywin32", "python-dotenv"]
 
 [project.urls]
 Documentation = "https://github.com/dzgreen/brk-robot006#readme"
