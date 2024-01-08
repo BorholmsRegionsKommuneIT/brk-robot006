@@ -181,6 +181,11 @@ def read_report(folder_data_session: Path, bestillingsnavn: str) -> pd.core.fram
 
 df = read_report(folder_data_session=folder_data_session, bestillingsnavn=bestillingsnavn)
 
+# ------------------------------- Rens rapport ------------------------------- #
+# Fjern whitespace fra objects-columns
+df_obj = df.select_dtypes(['object'])
+df[df_obj.columns] = df_obj.apply(lambda x: x.str.strip())
+
 # ----------------------------------- TEMP ----------------------------------- #
 df = df[:20]
 # --------------------------------- END TEMP --------------------------------- #
@@ -340,7 +345,7 @@ def download_single_ansforhold(manummer: str, folder_data_session: Path, bestill
         logger.error(f"An error occurred: {e}")
 
 
-manummer_list = (df["manummer"]).str.strip().tolist()
+manummer_list = (df["manummer"]).tolist()
 
 
 def download_all_ansforhold(manummer_list: list, folder_data_session: Path, bestillingsnavn: str, session) -> None:
@@ -404,10 +409,10 @@ def filter_df_ansforhold(df_ansforhold) -> pd.DataFrame:
 
 
 # --------- Funktion til at sortere og udvælge den ældste ansættelse --------- #
-def sort_df_ansforhold(df_ansforhold) -> pd.DataFrame:
+def sort_df_filtered(df_filtered) -> pd.DataFrame:
     try:
-        df_ansforhold["startdato"] = pd.to_datetime(df_ansforhold["startdato"], format="%d.%m.%Y")
-        df_sorted = df_ansforhold.sort_values(by=["startdato"])
+        df_filtered["startdato"] = pd.to_datetime(df_filtered["startdato"], format="%d.%m.%Y")
+        df_sorted = df_filtered.sort_values(by=["startdato"])
 
         if not df_sorted.empty:
             df_sorted = df_sorted.iloc[[0]]
@@ -419,7 +424,8 @@ def sort_df_ansforhold(df_ansforhold) -> pd.DataFrame:
 
 
 # --- Kør de 3 funktioner (read, filter, sort) i et loop over alle manumre --- #
-# ---- Hvis medarbejder har en linje, svare det til en True value i result --- #
+# ---- Hvis medarbejder har en linje, svarer det til en True value i result --- #
+# ---------- all_rows indeholder alle df_sorted samlet i et datarame --------- #
 def process_all_ansforhold(
     df: pd.DataFrame,
     result: pd.DataFrame,
@@ -431,6 +437,7 @@ def process_all_ansforhold(
     """
     loops over manummer_list and runs all the single functions
     """
+    global all_rows
     all_rows = []  # List to store the single-row DataFrames, mostly for debugging purposes
 
     for manummer in manummer_list:
@@ -442,7 +449,7 @@ def process_all_ansforhold(
 
             # Filter and sort the DataFrame
             df_filtered = filter_df_ansforhold(df_ansforhold)
-            df_sorted = sort_df_ansforhold(df_filtered)
+            df_sorted = sort_df_filtered(df_filtered)
             # Append the sorted DataFrame to the list
             if df_sorted.columns[0] is np.nan:
                 df_sorted = df_sorted.drop(df_sorted.columns[0], axis=1)
@@ -474,13 +481,11 @@ result = process_all_ansforhold(
     manummer_column='manummer',
 )
 
-# ---------------------------------------------------------------------------- #
-#                         Inspect data for correctness.                        #
-# ---------------------------------------------------------------------------- #
 
-# ---------------------------------------------------------------------------- #
-#                                 FEJL I RESULT                                #
-# ---------------------------------------------------------------------------- #
+# --------------------------------- debugging -------------------------------- #
+# df_ansforhold_59433 = read_single_ansforhold('59433', folder_data_session, bestillingsnavn)
+# df_filtered_59433 = filter_df_ansforhold(df_ansforhold)
+# df_sorted_59433 = sort_df_filtered(df_filtered)
 
 # oprettet_pension_maaned.to_csv(
 #    path_or_buf=Path(folder_data_session / "oprettet_pension_maaned.csv"), index=False, encoding='utf-8'
