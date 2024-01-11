@@ -5,18 +5,20 @@ Robot006
 # Libs
 import datetime
 import getpass
+from http.client import TEMPORARY_REDIRECT
 import os
 
 import time
 from collections import defaultdict  # to dtype all vars at once
 from pathlib import Path
 
-import brk_rpa_utils as login
+import brk_rpa_utils
 import numpy as np
 import pandas as pd
 from loguru import logger
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
+import pandas as pd
 
 
 # settings and initializations
@@ -28,9 +30,10 @@ pam_path = os.getenv("PAM_PATH")
 ri_url = os.getenv("RI_URL")
 robot_name = getpass.getuser()
 
-bestillingsnavn = robot_name + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+# bestillingsnavn = robot_name + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+bestillingsnavn = robot_name + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
 folder_data_session = Path(folder_data / bestillingsnavn)
-session = login.start_opus(pam_path, robot_name, sapshcut_path)
+session = brk_rpa_utils.start_opus(pam_path, robot_name, sapshcut_path)
 
 
 # ---------------------------------------------------------------------------- #
@@ -297,8 +300,6 @@ result = er_medarbejder_under_21(df, result, 'manummer')
 #               Er medarbejder oprettet med pension på månedsløn               #
 # ---------------------------------------------------------------------------- #
 
-# ----------- Download individuelle ansættelsesforløb som csv filer ---------- #
-
 
 def download_single_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str, session) -> None:
     """
@@ -362,8 +363,10 @@ def download_all_ansforhold(manummer_list: list, folder_data_session: Path, best
 download_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session)
 
 
-# ------------------ Funktion til at læse ansættelsesforløb ------------------ #
 def read_single_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str) -> pd.DataFrame:
+    """
+    Funktion til at læse ansættelsesforløb
+    """
     try:
         data_types = defaultdict(lambda: "str")
 
@@ -490,3 +493,43 @@ result = process_all_ansforhold(
 # oprettet_pension_maaned.to_csv(
 #    path_or_buf=Path(folder_data_session / "oprettet_pension_maaned.csv"), index=False, encoding='utf-8'
 # )
+
+# ---------------------------------------------------------------------------- #
+#     Har den timelønnede været ansat mindre end 12 måneder indenfor 8 år?     #
+# ---------------------------------------------------------------------------- #
+
+# Mere end 12 -> True
+# Mindre end 12 -> False
+
+# ------------------------------ Kør RI rapport ------------------------------ #
+
+# ---------------------------------------------------------------------------- #
+#                               INSERT RI MODULE                               #
+# ---------------------------------------------------------------------------- #
+
+mhtml_path = Path(folder_data_session / 'test.xls')
+anshistorik = brk_rpa_utils.parse_ri_html_report_to_dataframe(mhtml_path)
+
+anshistorik['antal'] = pd.to_numeric(anshistorik['antal'])
+
+
+# create a new dataframe from anshistorik where rows are aggregated
+# into months and the antal column is summed pr month.
+
+anshistorik['year_month'] = anshistorik['date'].dt.to_period('M')
+
+anshistorik_grouped = anshistorik.groupby('year_month')['antal'].sum().reset_index()
+
+# Filter rows where antal > 34,67
+filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped['antal'] > 34.67]
+
+filtered_anshistorik_grouped.shape[0]
+
+# fix: should append to to result
+if filtered_anshistorik_grouped.shape[0] > 12:
+    print('mere end 12')
+else:
+    print('mindre')
+
+
+# Funktion til download af historik for et enkelt cpr nummer
