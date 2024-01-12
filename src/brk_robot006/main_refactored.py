@@ -5,14 +5,15 @@ Robot006
 # Libs
 import datetime
 import getpass
-from http.client import TEMPORARY_REDIRECT
+
+# what is this: from http.client import TEMPORARY_REDIRECT
 import os
 
 import time
 from collections import defaultdict  # to dtype all vars at once
 from pathlib import Path
 
-import brk_rpa_utils
+import brk_rpa_utils  # github
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -23,17 +24,18 @@ import pandas as pd
 
 # settings and initializations
 logger.info("start")
-load_dotenv()
+if user == 'robot006':
+    load_dotenv()
 folder_data = Path(os.getenv("FOLDER_DATA"))
 sapshcut_path = Path(os.getenv("SAPSHCUT_PATH"))
 pam_path = os.getenv("PAM_PATH")
 ri_url = os.getenv("RI_URL")
-robot_name = getpass.getuser()
+user = getpass.getuser()
 
-# bestillingsnavn = robot_name + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
-bestillingsnavn = robot_name + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+# bestillingsnavn = user + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+bestillingsnavn = user + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
 folder_data_session = Path(folder_data / bestillingsnavn)
-session = brk_rpa_utils.start_opus(pam_path, robot_name, sapshcut_path)
+session = brk_rpa_utils.start_opus(pam_path, user, sapshcut_path)
 
 
 # ---------------------------------------------------------------------------- #
@@ -135,7 +137,14 @@ def download_report(folder_data, bestillingsnavn, folder_data_session, session) 
     time.sleep(0.5)
 
 
-download_report(folder_data, bestillingsnavn, folder_data_session, session)
+def generate_report(file_path: Path):
+    df = starwars = pd.read_csv("https://raw.githubusercontent.com/dzgreen/datasets/main/starwars.csv")
+
+
+if user == 'robot006':
+    download_report(folder_data, bestillingsnavn, folder_data_session, session)
+else:
+    generate_report(file_path)
 
 
 def return_to_start_view() -> None:
@@ -149,7 +158,8 @@ def return_to_start_view() -> None:
     session.findById("wnd[0]/usr/cntlIMAGE_CONTAINER/shellcont/shell/shellcont[0]/shell").doubleClickNode("F00004")
 
 
-return_to_start_view()
+if user == 'robot006':
+    return_to_start_view()
 
 
 def read_report(folder_data_session: Path, bestillingsnavn: str) -> pd.core.frame.DataFrame:
@@ -239,8 +249,16 @@ def har_medarbejder_pension_i_forvejen(df: pd.DataFrame, result: pd.DataFrame, m
         temp_df['har_pension_0_pct'] = (temp_df["pensberegnkode"] == "1") & (temp_df["samletpct"] == 0.00)
 
         # Merge the result DataFrame with the calculated column from the temporary DataFrame
-        result = result.merge(temp_df[[manummer_column, 'har_pension']], on=manummer_column, how='left')
-        result = result.merge(temp_df[[manummer_column, 'har_pension_0_pct']], on=manummer_column, how='left')
+        result = result.merge(
+            temp_df[[manummer_column, 'har_pension']],
+            on=manummer_column,
+            how='left',
+        )
+        result = result.merge(
+            temp_df[[manummer_column, 'har_pension_0_pct']],
+            on=manummer_column,
+            how='left',
+        )
     else:
         raise ValueError("The DataFrame must contain 'pensberegnkode' and 'samletpct' columns.")
 
@@ -288,7 +306,11 @@ def er_medarbejder_under_21(df: pd.DataFrame, result: pd.DataFrame, manummer_col
     temp_df['er_under_21'] = temp_df["alder"] < 21
 
     # Merge the result DataFrame with the calculated column from temp_df
-    result = result.merge(temp_df[[manummer_column, 'er_under_21']], on=manummer_column, how='left')
+    result = result.merge(
+        temp_df[[manummer_column, 'er_under_21']],
+        on=manummer_column,
+        how='left',
+    )
 
     return result
 
@@ -349,7 +371,12 @@ def download_single_ansforhold(manummer: str, folder_data_session: Path, bestill
 manummer_list = (df["manummer"]).tolist()
 
 
-def download_all_ansforhold(manummer_list: list, folder_data_session: Path, bestillingsnavn: str, session) -> None:
+def download_all_ansforhold(
+    manummer_list: list,
+    folder_data_session: Path,
+    bestillingsnavn: str,
+    session,
+) -> None:
     for manummer in manummer_list:
         try:
             # Download data for each manummer
@@ -443,6 +470,9 @@ def process_all_ansforhold(
     global all_rows
     all_rows = []  # List to store the single-row DataFrames, mostly for debugging purposes
 
+    # Create a temporary DataFrame for the merge operation
+    temp_df = df[[manummer_column]].copy()
+
     for manummer in manummer_list:
         try:
             # Read and process the downloaded data
@@ -453,23 +483,27 @@ def process_all_ansforhold(
             # Filter and sort the DataFrame
             df_filtered = filter_df_ansforhold(df_ansforhold)
             df_sorted = sort_df_filtered(df_filtered)
+
             # Append the sorted DataFrame to the list
             if df_sorted.columns[0] is np.nan:
                 df_sorted = df_sorted.drop(df_sorted.columns[0], axis=1)
             all_rows.append(df_sorted)
 
-            # Create a temporary DataFrame for the merge operation
-            temp_df = df[[manummer_column]].copy()
-
+            bull = len(df_sorted) == 1
             # Append True or False to temp_df depending on if df_sorted has exactly one row
-            temp_df['oprettet_pension_maaned'] = len(df_sorted) == 1
+            temp_df.loc[temp_df[manummer_column] == manummer, 'oprettet_pension_maaned'] = bull
 
         except Exception as e:
             logger.error(f"Error processing manummer {manummer}: {e}")
             # Continue with the next iteration
             continue
     # Merge
-    result = pd.merge(result, temp_df[['manummer', 'oprettet_pension_maaned']], on='manummer', how='left')
+    result = pd.merge(
+        result,
+        temp_df[['manummer', 'oprettet_pension_maaned']],
+        on='manummer',
+        how='left',
+    )
     # Concatenate all single-row DataFrames into one DataFrame
     all_rows = pd.concat(all_rows, ignore_index=False)
     return result
@@ -486,9 +520,9 @@ result = process_all_ansforhold(
 
 
 # --------------------------------- debugging -------------------------------- #
-# df_ansforhold_59433 = read_single_ansforhold('59433', folder_data_session, bestillingsnavn)
-# df_filtered_59433 = filter_df_ansforhold(df_ansforhold)
-# df_sorted_59433 = sort_df_filtered(df_filtered)
+df_ansforhold_59433 = read_single_ansforhold('59433', folder_data_session, bestillingsnavn)
+df_filtered_59433 = filter_df_ansforhold(df_ansforhold_59433)
+df_sorted_59433 = sort_df_filtered(df_filtered_59433)
 
 # oprettet_pension_maaned.to_csv(
 #    path_or_buf=Path(folder_data_session / "oprettet_pension_maaned.csv"), index=False, encoding='utf-8'
@@ -498,38 +532,136 @@ result = process_all_ansforhold(
 #     Har den timelønnede været ansat mindre end 12 måneder indenfor 8 år?     #
 # ---------------------------------------------------------------------------- #
 
-# Mere end 12 -> True
-# Mindre end 12 -> False
 
 # ------------------------------ Kør RI rapport ------------------------------ #
 
-# ---------------------------------------------------------------------------- #
-#                               INSERT RI MODULE                               #
-# ---------------------------------------------------------------------------- #
 
-mhtml_path = Path(folder_data_session / 'test.xls')
-anshistorik = brk_rpa_utils.parse_ri_html_report_to_dataframe(mhtml_path)
+def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> None:
+    # initialize
+    # hostname = socket.gethostname()
 
-anshistorik['antal'] = pd.to_numeric(anshistorik['antal'])
+    # check if dev_mode
+    # dev_mode = hostname.startswith("PCA")
+
+    # Get current month and year in the format mm.yyyy
+    current_month_year = datetime.datetime.now().strftime("%m.%Y")
+
+    old_month_year = (datetime.datetime.now() - datetime.timedelta(days=365 * 8)).strftime("%m.%Y")
+
+    # concat current month and year with old month and year
+    date_interval = f"{old_month_year} - {current_month_year}"
+
+    # ansforhold = '03'
+    # hovedlonart = '0100; 0140; 0395; 0469; 0516; 0517'
+
+    try:
+        with sync_playwright() as playwright:
+            ri = login.start_ri(pam_path, user, ri_url, playwright)
+            if ri is None:
+                raise Exception("Failed to start RI")
+            # tuple unpacking:
+            page, context, browser = ri
+
+            # add actions to RI
+            try:
+                page.get_by_text("Lønsagsbehandling").click()
+
+                with page.expect_popup() as page1_info:
+                    page.frame_locator('iframe[name="contentAreaFrame"]').frame_locator(
+                        'iframe[name="Rapporter til lønkontrol"]'
+                    ).get_by_role("link", name="Udbetalte timer på timeløn").click()
+
+                page1 = page1_info.value
+
+                selector_date_interval = (
+                    "#DLG_VARIABLE_vsc_cvl_table_cid2x2 > table > tbody > tr > td:first-child > input"
+                )
+
+                selector_cvr = "#DLG_VARIABLE_vsc_cvl_table_cid2x6 > table > tbody > tr > td:first-child > input"
+
+                # click in date field
+                # rapport_variabelinput.frame_locator(
+                #    'iframe[name="iframe_Roundtrip_9223372036563636042"]'
+                # ).locator("#DLG_VARIABLE_vsc_cvl_VAR_3_INPUT_inp").click()
+
+                # input datointerval 8 aar tilbage, som 12.2015 - 11.2023
+                page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(
+                    selector_date_interval
+                ).fill(date_interval)
+
+                # cpr nummer
+                page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(selector_cvr).fill(
+                    cpr
+                )
+
+                # Click OK
+                page1.frame_locator("iframe[name=\"iframe_Roundtrip_9223372036563636042\"]").get_by_role(
+                    "link", name="OK"
+                ).click()
+
+                # Donwload
+                with page1.expect_download() as download_info:
+                    with page1.expect_popup() as page4_info:
+                        page1.frame_locator("iframe[name=\"iframe_Roundtrip_9223372036563636042\"]").get_by_role(
+                            "link", name="Excel uden topinfo"
+                        ).click()
+                    page4 = page4_info.value
+                download = download_info.value
+                download_path = Path(folder_data_session / f"{bestillingsnavn}_{manummer}_anshistorik.mhtml")
+                download.save_as(download_path)
+
+            except Exception as e:
+                logger.error("An error occurred during page interactions", exc_info=True)
+                print(f"An error occurred during page interactions: {e}")
+
+            finally:
+                if page:
+                    page.close()
+                if context:
+                    context.close()
+                if browser:
+                    browser.close()
+
+    except Exception as e:
+        logger.error("An error occurred during playwright setup", exc_info=True)
+        print(f"An error occurred during playwright setup: {e}")
 
 
-# create a new dataframe from anshistorik where rows are aggregated
-# into months and the antal column is summed pr month.
-
-anshistorik['year_month'] = anshistorik['date'].dt.to_period('M')
-
-anshistorik_grouped = anshistorik.groupby('year_month')['antal'].sum().reset_index()
-
-# Filter rows where antal > 34,67
-filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped['antal'] > 34.67]
-
-filtered_anshistorik_grouped.shape[0]
-
-# fix: should append to to result
-if filtered_anshistorik_grouped.shape[0] > 12:
-    print('mere end 12')
-else:
-    print('mindre')
+# from inspect import getsource
+# print(getsource(brk_rpa_utils.parse_ri_html_report_to_dataframe))
 
 
-# Funktion til download af historik for et enkelt cpr nummer
+def process_all_anshistorik(cpr, folder_data_session, bestillingsnavn, manummer, df, result):
+    """
+    Mere end 12 -> True
+    Mindre end 12 -> False
+    """
+    for cpr in df['cprnr']:
+        # download single
+        download_single_anshistorik_from_ri(cpr, folder_data_session)
+
+        # parse and read
+        mhtml_path = Path(folder_data_session / f"{bestillingsnavn}_{manummer}_anshistorik.mhtml")
+        anshistorik = brk_rpa_utils.parse_ri_html_report_to_dataframe(mhtml_path)
+        anshistorik['antal'] = pd.to_numeric(anshistorik['antal'])
+
+        # create a new dataframe from anshistorik where rows are aggregated
+        # into months and the antal column is summed pr month.
+        anshistorik['year_month'] = anshistorik['date'].dt.to_period('M')
+        anshistorik_grouped = anshistorik.groupby('year_month')['antal'].sum().reset_index()
+
+        # Filter rows where antal > 34,67
+        filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped['antal'] > 34.67]
+
+        temp_df = df[[manummer_column, 'cprnr']].copy()
+
+        # Append True or False to temp_df depending on if filtered_anshistorik_grouped.shape[0] > 12
+        temp_df['over_12md_indenfor_8aar'] = len(filtered_anshistorik_grouped) > 12
+
+
+# download af historik for et enkelt cpr nummer
+# load mhtml som dataframe
+# gem som csv
+# filter, groupby, summarise, count rows
+# append row_count to result
+# Kør forrige punkter i et loop for alle cpr numre
