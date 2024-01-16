@@ -12,14 +12,19 @@ import os
 import time
 from collections import defaultdict  # to dtype all vars at once
 from pathlib import Path
+import shutil
 
 import brk_rpa_utils  # github
 import numpy as np
 import pandas as pd
 from loguru import logger
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Playwright, sync_playwright
 from dotenv import load_dotenv
 import pandas as pd
+from helium import *
+from selenium.webdriver import Edge, Chrome
+import time
+import os
 
 
 # settings and initializations
@@ -33,8 +38,7 @@ pam_path = os.getenv("PAM_PATH")
 ri_url = os.getenv("RI_URL")
 
 
-# bestillingsnavn = user + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
-bestillingsnavn = user + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+bestillingsnavn = user + "_" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
 folder_data_session = Path(folder_data / bestillingsnavn)
 session = brk_rpa_utils.start_opus(pam_path, user, sapshcut_path)
 
@@ -205,75 +209,80 @@ df[df_obj.columns] = df_obj.apply(lambda x: x.str.strip())
 df = df[:5]
 # --------------------------------- END TEMP --------------------------------- #
 
+# --------- Get df row count that must persist throughout the session -------- #
 
-def validate_dataframe_col_number(dataframe, col_number, dataframe_name):
+persistent_df_row_count = len(df)
+
+
+def validate_dataframe(dataframe, col_count, row_count=None, dataframe_name="", manummer_column=""):
     cols = dataframe.shape[1]
     try:
-        if cols != col_number:
-            raise ValueError(f"{dataframe_name} has wrong number of columns: expected {col_number}, found {cols}")
-        logger.info(f"Validation successful: {dataframe_name} has the expected number of columns: {col_number}")
+        # Column count validation
+        if cols != col_count:
+            raise ValueError(f"{dataframe_name} has wrong number of columns: expected {col_count}, found {cols}")
+        logger.info(f"Validation successful: {dataframe_name} has the expected number of columns: {col_count}")
+
+        # Row count validation (only if row_count is provided)
+        if row_count is not None:
+            rows = len(dataframe)
+            if rows != row_count:
+                raise ValueError(f"{dataframe_name} has wrong number of rows: expected {row_count}, found {rows}")
+            logger.info(f"Validation successful: {dataframe_name} has the expected number of rows: {row_count}")
+
+        # Check if the manummer_column exists
+        if manummer_column and manummer_column not in dataframe.columns:
+            raise ValueError(f"{dataframe_name} must contain the '{manummer_column}' column.")
+
     except ValueError as e:
         logger.error(f"Validation failed: {e}")
 
 
-validate_dataframe_col_number(df, 15, 'df')
-
-# Creating the result DataFrame, which will contain all Boolean vectors corresponding to the questions in the documentation flowchart
-result = df[['manummer']].copy()
+validate_dataframe(
+    dataframe=df, col_count=15, row_count=persistent_df_row_count, dataframe_name='df', manummer_column='manummer'
+)
 
 
 # ---------------------------------------------------------------------------- #
 #                      Har medarbejder pension i forvejen                      #
 # ---------------------------------------------------------------------------- #
-def har_medarbejder_pension_i_forvejen(df: pd.DataFrame, result: pd.DataFrame, manummer_column: str) -> pd.DataFrame:
+def har_medarbejder_pension_i_forvejen(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Adds a boolean column to the 'result' DataFrame indicating if the employee,
-    identified by the 'manummer' column, is created with pension. This is based
-    on conditions in the provided DataFrame 'df'.
+    Adds 2 boolean columns to 'DataFrame' indicating if the employee,
+    identified by the 'manummer' column, is created with pension.
 
     Parameters:
-    df (pd.DataFrame): The DataFrame containing employee data with 'pensberegnkode', 'samletpct', and 'manummer' columns.
-    result (pd.DataFrame): The DataFrame to which the new column will be added.
+    DataFrame (pd.DataFrame): The DataFrame containing employee data with 'pensberegnkode', 'samletpct', and 'manummer' columns.
     manummer_column (str): The name of the column in both DataFrames that contains employee IDs.
 
     Returns:
-    pd.DataFrame: The 'result' DataFrame with an added boolean column 'har_pension'.
+    pd.DataFrame: df with an added boolean column 'har_pension' and 'har_pension_0_pct'.
     """
-    # Ensure both DataFrames contain the manummer column
-    if manummer_column not in df.columns or manummer_column not in result.columns:
-        raise ValueError(f"The DataFrame must contain the '{manummer_column}' column.")
 
     # Check if required columns exist in df
     if 'pensberegnkode' in df.columns and 'samletpct' in df.columns:
-        # Create a temporary DataFrame for the merge operation
-        temp_df = df[[manummer_column, 'pensberegnkode', 'samletpct']].copy()
-        temp_df['har_pension'] = (temp_df["pensberegnkode"] == "1") & (temp_df["samletpct"] > 0.00)
-        temp_df['har_pension_0_pct'] = (temp_df["pensberegnkode"] == "1") & (temp_df["samletpct"] == 0.00)
-
-        # Merge the result DataFrame with the calculated column from the temporary DataFrame
-        result = result.merge(
-            temp_df[[manummer_column, 'har_pension']],
-            on=manummer_column,
-            how='left',
-        )
-        result = result.merge(
-            temp_df[[manummer_column, 'har_pension_0_pct']],
-            on=manummer_column,
-            how='left',
-        )
+        df['har_pension'] = (df["pensberegnkode"] == "1") & (df["samletpct"] > 0.00)
+        df['har_pension_0_pct'] = (df["pensberegnkode"] == "1") & (df["samletpct"] == 0.00)
     else:
         raise ValueError("The DataFrame must contain 'pensberegnkode' and 'samletpct' columns.")
 
-    return result
+    return df
 
 
-result = har_medarbejder_pension_i_forvejen(df, result, 'manummer')
+df = har_medarbejder_pension_i_forvejen(df)
+
+validate_dataframe(
+    dataframe=df, col_count=17, row_count=persistent_df_row_count, dataframe_name='df', manummer_column='manummer'
+)
 
 
 # ---------------------------------------------------------------------------- #
 #                            Er medarbejder under 21                           #
 # ---------------------------------------------------------------------------- #
-def _calculate_age(fodselsdag_str):
+def _calculate_age(cpr: str) -> int:
+    """
+    Returns age from cpr number
+    """
+    fodselsdag_str = cpr[:6]
     fodselsdag = datetime.datetime.strptime(fodselsdag_str, "%d%m%y")
     today = datetime.datetime.today()
     if fodselsdag.year > today.year:
@@ -283,41 +292,31 @@ def _calculate_age(fodselsdag_str):
     return age
 
 
-# Use new approach
-def er_medarbejder_under_21(df: pd.DataFrame, result: pd.DataFrame, manummer_column: str) -> pd.DataFrame:
+def er_medarbejder_under_21(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Adds a boolean column to the 'result' DataFrame indicating if the employee,
+    Adds a boolean column to the DataFrame indicating if the employee,
     identified by the 'manummer' column, is under the age of 21.
 
     Parameters:
-    df (pd.DataFrame): The DataFrame containing employee data with 'cprnr' column.
-    result (pd.DataFrame): The DataFrame to which the new column will be added.
-    manummer_column (str): The name of the column in both DataFrames that contains employee IDs.
+    df (pd.DataFrame): The DataFrame containing employee data with 'cprnr' and 'manummer' columns.
 
     Returns:
-    pd.DataFrame: The 'result' DataFrame with an added boolean column 'er_under_21'.
+    pd.DataFrame: The 'df' DataFrame with an added boolean column 'er_under_21'.
     """
-    # Create a temporary DataFrame to avoid modifying the original df
-    temp_df = df[[manummer_column, 'cprnr']].copy()
+    if 'cprnr' not in df.columns:
+        raise ValueError("The DataFrame must contain the 'cprnr' column.")
 
-    # Convert CPR number to birthdate and calculate age in the temp_df
-    temp_df["fodselsdato"] = temp_df["cprnr"].str[0:6]
-    temp_df["alder"] = temp_df["fodselsdato"].apply(_calculate_age)  # Assuming _calculate_age is a predefined function
+    # Add 'er_under_21' column to df
+    df['er_under_21'] = df['cprnr'].apply(_calculate_age) < 21
 
-    # Add 'er_under_21' column to temp_df
-    temp_df['er_under_21'] = temp_df["alder"] < 21
-
-    # Merge the result DataFrame with the calculated column from temp_df
-    result = result.merge(
-        temp_df[[manummer_column, 'er_under_21']],
-        on=manummer_column,
-        how='left',
-    )
-
-    return result
+    return df
 
 
-result = er_medarbejder_under_21(df, result, 'manummer')
+df = er_medarbejder_under_21(df)
+
+validate_dataframe(
+    dataframe=df, col_count=18, row_count=persistent_df_row_count, dataframe_name='df', manummer_column='manummer'
+)
 
 
 # ---------------------------------------------------------------------------- #
@@ -370,26 +369,27 @@ def download_single_ansforhold(manummer: str, folder_data_session: Path, bestill
         logger.error(f"An error occurred: {e}")
 
 
-manummer_list = (df["manummer"]).tolist()
-
-
 def download_all_ansforhold(
-    manummer_list: list,
+    df: pd.DataFrame,
     folder_data_session: Path,
     bestillingsnavn: str,
     session,
 ) -> None:
+    manummer_list = (df["manummer"]).tolist()
+
     for manummer in manummer_list:
         try:
             # Download data for each manummer
             download_single_ansforhold(manummer, folder_data_session, bestillingsnavn, session)
         except Exception as e:
             logger.error(f"Error downloading ansforhold for manummer {manummer}: {e}")
-            # Continue with the next iteration
-            continue
+        # Continue with the next iteration
+        continue
 
 
-download_all_ansforhold(manummer_list, folder_data_session, bestillingsnavn, session)
+download_all_ansforhold(
+    df=df, folder_data_session=folder_data_session, bestillingsnavn=bestillingsnavn, session=session
+)
 
 
 def read_single_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str) -> pd.DataFrame:
@@ -481,7 +481,7 @@ def process_all_ansforhold(
             # Read and process the downloaded data
             df_ansforhold = read_single_ansforhold(manummer, folder_data_session, bestillingsnavn)
 
-            validate_dataframe_col_number(df_ansforhold, 20, 'df_ansforhold')
+            validate_dataframe(df_ansforhold, 20, 'df_ansforhold')
 
             # Filter and sort the DataFrame
             df_filtered = filter_df_ansforhold(df_ansforhold)
@@ -512,15 +512,63 @@ def process_all_ansforhold(
     return result
 
 
-result = process_all_ansforhold(
+def process_all_ansforhold(
+    df: pd.DataFrame,
+    folder_data_session: Path,
+    bestillingsnavn: str,
+) -> pd.DataFrame:
+    """
+    Loops over manummer_list and runs all the single functions.
+    """
+    global all_rows
+    all_rows = []  # List to store the single-row DataFrames, mostly for debugging purposes
+    manummer_list = (df["manummer"]).tolist()
+    df['oprettet_pension_maaned'] = False  # Initialize the column in df
+
+    for manummer in manummer_list:
+        try:
+            # Read and process the downloaded data
+            df_ansforhold = read_single_ansforhold(manummer, folder_data_session, bestillingsnavn)
+
+            validate_dataframe(
+                dataframe=df_ansforhold,
+                col_count=20,
+                dataframe_name='df_ansforhold',
+                manummer_column='manr',
+            )
+            # Filter and sort the DataFrame
+            df_filtered = filter_df_ansforhold(df_ansforhold)
+            df_sorted = sort_df_filtered(df_filtered)
+
+            # Append the sorted DataFrame to the list
+            if df_sorted.columns[0] is np.nan:
+                df_sorted = df_sorted.drop(df_sorted.columns[0], axis=1)
+            all_rows.append(df_sorted)
+
+            bull = len(df_sorted) == 1
+            # Update df directly depending on if df_sorted has exactly one row
+            df.loc[df['manummer'] == manummer, 'oprettet_pension_maaned'] = bull
+
+        except Exception as e:
+            logger.error(f"Error processing manummer {manummer}: {e}")
+            # Continue with the next iteration
+            continue
+
+    # Concatenate all single-row DataFrames into one DataFrame
+    all_rows = pd.concat(all_rows, ignore_index=False)
+
+    return df
+
+
+df = process_all_ansforhold(
     df=df,
-    result=result,
-    manummer_list=manummer_list,
     folder_data_session=folder_data_session,
     bestillingsnavn=bestillingsnavn,
-    manummer_column='manummer',
 )
 
+validate_dataframe(
+    dataframe=df, col_count=19, row_count=persistent_df_row_count, dataframe_name='df', manummer_column='manummer'
+)
 
 # --------------------------------- debugging -------------------------------- #
 # df_ansforhold_59433 = read_single_ansforhold('59433', folder_data_session, bestillingsnavn)
@@ -531,14 +579,10 @@ result = process_all_ansforhold(
 #    path_or_buf=Path(folder_data_session / "oprettet_pension_maaned.csv"), index=False, encoding='utf-8'
 # )
 
+
 # ---------------------------------------------------------------------------- #
 #     Har den timelønnede været ansat mindre end 12 måneder indenfor 8 år?     #
 # ---------------------------------------------------------------------------- #
-
-
-# ------------------------------ Kør RI rapport ------------------------------ #
-
-
 def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> None:
     """
     try https://github.com/mherrmann/helium
@@ -633,17 +677,12 @@ def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> 
         print(f"An error occurred during playwright setup: {e}")
 
 
-# from inspect import getsource
-# print(getsource(brk_rpa_utils.parse_ri_html_report_to_dataframe))
-
-
-def process_all_anshistorik(folder_data_session, df, manummer_column, result):
+def process_all_anshistorik(folder_data_session, df):
     """
     Mere end 12 -> True
     Mindre end 12 -> False
     """
-    temp_df = df[[manummer_column, 'cprnr']].copy()
-    temp_df['hourly_more_than_12_months'] = False
+    df['hourly_more_than_12_months'] = False  # Initialize the column in df
 
     for cpr in df['cprnr']:
         # download single
@@ -652,7 +691,6 @@ def process_all_anshistorik(folder_data_session, df, manummer_column, result):
         # parse and read
         mhtml_path = Path(folder_data_session / f"anshistorik_{cpr}.mhtml")
         anshistorik = brk_rpa_utils.parse_ri_html_report_to_dataframe(mhtml_path)
-        # validate_dataframe_col_number()
 
         # create a new dataframe from anshistorik where rows are aggregated
         # into months and the antal column is summed pr month.
@@ -661,22 +699,18 @@ def process_all_anshistorik(folder_data_session, df, manummer_column, result):
 
         # Filter rows where antal > 34,67
         filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped['antal'] > 34.67]
+
+        # boolean value
         hourly_more_than_12_months = len(filtered_anshistorik_grouped) > 12
 
-        # Append True or False to temp_df depending on if filtered_anshistorik_grouped has more than 12 rows
-        temp_df.loc[temp_df[manummer_column] == manummer, 'hourly_more_than_12_months'] = hourly_more_than_12_months
+        df.loc[df['cprnr'] == cpr, 'hourly_more_than_12_months'] = hourly_more_than_12_months
 
-        result = pd.merge(
-            result,
-            temp_df[['manummer', 'hourly_more_than_12_months']],
-            on='manummer',
-            how='left',
-        )
-
-        return result
+    return df
 
 
-process_all_anshistorik(folder_data_session=folder_data_session, df=df, manummer_column='manummer', result=result)
+df = process_all_anshistorik(folder_data_session=folder_data_session, df=df)
+
+df.to_csv(folder_data_session / "output.csv", index=False)
 
 
 # download af historik for et enkelt cpr nummer
