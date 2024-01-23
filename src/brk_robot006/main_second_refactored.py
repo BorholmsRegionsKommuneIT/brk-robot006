@@ -11,35 +11,44 @@ import os
 # import shutil
 import time
 from collections import defaultdict  # to dtype all vars at once
-import pendulum
 from pathlib import Path
 
-import brk_rpa_utils  # github
+import brk_rpa_utils
 import numpy as np
 import pandas as pd
+import pendulum
 from dotenv import load_dotenv
 from loguru import logger
 from playwright.sync_api import sync_playwright
 
 # settings and initializations
-logger.info("start")
+devmode = 1 # 0 / 1
+downloadmode = 0 # 0 / 1
+
+if devmode == 1:
+    logger.info("starting in devmode")
+else:
+    logger.info("starting in prodmode")
+
 user = getpass.getuser()
-if user == "robot006":
-    load_dotenv()
+load_dotenv()
 folder_data = Path(os.getenv("FOLDER_DATA"))
 sapshcut_path = Path(os.getenv("SAPSHCUT_PATH"))
 pam_path = os.getenv("PAM_PATH")
 ri_url = os.getenv("RI_URL")
 
+if devmode == 1:
+    bestillingsnavn = user + "_" + "persistent_dev_data"
+else:
+    bestillingsnavn = user + "_" + pendulum.now().strftime("%Y%m%d%H%M%S")
 
-bestillingsnavn = user + "_" + pendulum.now().strftime("%Y%m%d%H%M%S")
 folder_data_session = Path(folder_data / bestillingsnavn)
-session = brk_rpa_utils.start_opus(pam_path, user, sapshcut_path)
+session = brk_rpa_utils.start_opus(pam_path=pam_path, user= user, sapshcut_path= sapshcut_path)
 
 
 # ---------------------------------------------------------------------------- #
 #                                Rapport trækkes                               #
-# ---------------------------------------------------------------------------- #
+#---------------------------------------------------------------------------- #
 def download_report(folder_data, bestillingsnavn, folder_data_session, session) -> None:
     """
     This function downloads a report from OPUS and saves it in a folder named after the current date and time.
@@ -134,16 +143,8 @@ def download_report(folder_data, bestillingsnavn, folder_data_session, session) 
     session.findById("wnd[1]/tbar[0]/btn[0]").press()
     time.sleep(0.5)
 
-
-def generate_report(file_path: str):
-    df = pd.read_csv(file_path)
-    return df
-
-
-if user == "robot006":
+if downloadmode == 1:
     download_report(folder_data, bestillingsnavn, folder_data_session, session)
-else:
-    df = generate_report(file_path="https://raw.githubusercontent.com/dzgreen/datasets/main/starwars.csv")
 
 
 def return_to_start_view() -> None:
@@ -156,8 +157,7 @@ def return_to_start_view() -> None:
 
     session.findById("wnd[0]/usr/cntlIMAGE_CONTAINER/shellcont/shell/shellcont[0]/shell").doubleClickNode("F00004")
 
-
-if user == "robot006":
+if downloadmode == 1:
     return_to_start_view()
 
 
@@ -282,11 +282,11 @@ def _calculate_age(cpr: str) -> int:
     Returns age from cpr number
     """
     fodselsdag_str = cpr[:6]
-    fodselsdag = datetime.datetime.strptime(fodselsdag_str, "%d%m%y").replace(tzinfo=datetime.timezone.utc)
-    today = datetime.datetime.now(tz=datetime.timezone.utc)
+    fodselsdag = pendulum.from_format(fodselsdag_str, "DDMMYY").in_tz("UTC")
+    today = pendulum.now("UTC")
     if fodselsdag.year > today.year:
-        fodselsdag = fodselsdag.replace(year=fodselsdag.year - 100)
-    days_difference = (today - fodselsdag).days
+        fodselsdag = fodselsdag.subtract(years=100)
+    days_difference = (today - fodselsdag).in_days()
     age = days_difference // 365.25
     return age
 
@@ -545,9 +545,9 @@ def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> 
     # dev_mode = hostname.startswith("PCA")
 
     # Get current month and year in the format mm.yyyy
-    current_month_year = datetime.now(timezone.utc).strftime("%m.%Y")
+    current_month_year = pendulum.now().in_tz("UTC").format("MM.YYYY")
 
-    old_month_year = (datetime.now(timezone.utc) - datetime.timedelta(days=365 * 8)).strftime("%m.%Y")
+    old_month_year = pendulum.now().in_tz("UTC").subtract(years=8).format("MM.YYYY")
 
     # concat current month and year with old month and year
     date_interval = f"{old_month_year} - {current_month_year}"
@@ -557,7 +557,7 @@ def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> 
 
     try:
         with sync_playwright() as playwright:
-            ri = brk_rpa_utils.start_ri(pam_path, user, ri_url, playwright)
+            ri = brk_rpa_utils.start_ri(pam_path = pam_path, user=user, ri_url = ri_url, playwright = playwright)
             if ri is None:
                 msg = "Failed to start RI"
                 raise Exception(msg)
@@ -576,7 +576,7 @@ def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> 
                 page1 = page1_info.value
 
                 selector_date_interval = (
-                    "#DLG_VARIABLE_vsc_cvl_table_cid2x2 > table > tbody > tr > td:first-child > input"
+                     "#DLG_VARIABLE_vsc_cvl_table_cid2x2 > table > tbody > tr > td:first-child > input"
                 )
 
                 selector_cvr = "#DLG_VARIABLE_vsc_cvl_table_cid2x6 > table > tbody > tr > td:first-child > input"
@@ -628,8 +628,8 @@ def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> 
 
 def process_all_anshistorik(folder_data_session, df):
     """
-    Mere end 12 -> True
-    Mindre end 12 -> False
+     Mere end 12 -> True
+     Mindre end 12 -> False
     """
     df["hourly_more_than_12_months"] = False  # Initialize the column in df
 
@@ -646,7 +646,7 @@ def process_all_anshistorik(folder_data_session, df):
         anshistorik["year_month"] = anshistorik["date"].dt.to_period("M")
         anshistorik_grouped = anshistorik.groupby("year_month")["antal"].sum().reset_index()
 
-        # Filter rows where antal > 34,67
+         # Filter rows where antal > 34,67
         monthly_hour_threshhold = 34.67
         filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped["antal"] > monthly_hour_threshhold]
 

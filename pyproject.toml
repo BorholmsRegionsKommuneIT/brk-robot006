@@ -24,7 +24,15 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["brk-rpa-utils", "pandas", "numpy", "loguru", "playwright", "pywin32", "python-dotenv"]
+dependencies = [
+  "brk-rpa-utils@git+https://github.com/BorholmsRegionsKommuneIT/brk-rpa-utils.git",
+  "pandas",
+  "numpy",
+  "loguru",
+  "playwright",
+  "pywin32",
+  "python-dotenv",
+]
 
 [project.urls]
 Documentation = "https://github.com/dzgreen/brk-robot006#readme"
@@ -33,6 +41,9 @@ Source = "https://github.com/dzgreen/brk-robot006"
 
 [tool.hatch.version]
 path = "src/brk_robot006/__about__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.envs.default]
 dependencies = ["coverage[toml]>=6.5", "pytest"]
