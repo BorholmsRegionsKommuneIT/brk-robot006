@@ -2,11 +2,14 @@
 Robot006
 """
 
-# Libs
+# ----------------------------------- Libs ----------------------------------- #
 import getpass
 
 # what is this: from http.client import TEMPORARY_REDIRECT
+import io
+import json
 import os
+import re
 
 # import shutil
 import time
@@ -17,33 +20,49 @@ import brk_rpa_utils
 import numpy as np
 import pandas as pd
 import pendulum
+from bs4 import BeautifulSoup  # BeautifulSoup4
 from dotenv import load_dotenv
 from loguru import logger
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Playwright, sync_playwright
 
-# settings and initializations
-devmode = 1 # 0 / 1
-downloadmode = 0 # 0 / 1
+# ---------------------------------- Config ---------------------------------- #
 
-if devmode == 1:
-    logger.info("starting in devmode")
-else:
-    logger.info("starting in prodmode")
-
+server_name = os.environ["COMPUTERNAME"]
 user = getpass.getuser()
 load_dotenv()
+server_prefix = os.getenv("SERVER_PREFIX")
 folder_data = Path(os.getenv("FOLDER_DATA"))
 sapshcut_path = Path(os.getenv("SAPSHCUT_PATH"))
 pam_path = os.getenv("PAM_PATH")
 ri_url = os.getenv("RI_URL")
+log_path = os.getenv("LOG_PATH")
+logger.add(log_path, format="{time} {level} {message}", level="DEBUG")
 
-if devmode == 1:
+# Right now devmode has no real use.
+
+downloadmode = 0 # Don't download unless running on server with server_prefix
+if server_name.startswith(server_prefix):
+    devmode = 0
+    downloadmode = 1 # 0 / 1
+else:
+    devmode = 1 # (0 / 1)
+
+if devmode == 1 & downloadmode == 1:
+    logger.info("starting in devmode with report generation and download")
+if devmode == 1 & downloadmode == 0:
+    logger.info("starting in devmode without any downloads")
+if devmode == 0:
+    logger.info("starting in production with report generation and download")
+
+if downloadmode == 0:
     bestillingsnavn = user + "_" + "persistent_dev_data"
 else:
     bestillingsnavn = user + "_" + pendulum.now().strftime("%Y%m%d%H%M%S")
 
 folder_data_session = Path(folder_data / bestillingsnavn)
-session = brk_rpa_utils.start_opus(pam_path=pam_path, user= user, sapshcut_path= sapshcut_path)
+
+if downloadmode == 1:
+    session = brk_rpa_utils.start_opus(pam_path=pam_path, user= user, sapshcut_path= sapshcut_path)
 
 
 # ---------------------------------------------------------------------------- #
@@ -199,7 +218,8 @@ df_obj = df.select_dtypes(["object"])
 df[df_obj.columns] = df_obj.apply(lambda x: x.str.strip())
 
 # ----------------------------------- TEMP ----------------------------------- #
-df = df[:2]
+if devmode == 1:
+    df = df[:10]
 # --------------------------------- END TEMP --------------------------------- #
 
 # --------- Get df row count that must persist throughout the session -------- #
@@ -382,10 +402,13 @@ def download_all_ansforhold(df: pd.DataFrame, folder_data_session: Path, bestill
         # Continue with the next iteration
         continue
 
-
-download_all_ansforhold(
-    df=df, folder_data_session=folder_data_session, bestillingsnavn=bestillingsnavn, session=session
-)
+if downloadmode == 1:
+    download_all_ansforhold(
+        df=df,
+        folder_data_session=folder_data_session,
+        bestillingsnavn=bestillingsnavn,
+        session=session
+    )
 
 
 def read_single_ansforhold(manummer: str, folder_data_session: Path, bestillingsnavn: str) -> pd.DataFrame:
@@ -524,6 +547,7 @@ validate_dataframe(
     dataframe=df, col_count=19, row_count=persistent_df_row_count, dataframe_name="df", manummer_column="manummer"
 )
 
+
 # --------------------------------- debugging -------------------------------- #
 # df_ansforhold_59433 = read_single_ansforhold('59433', folder_data_session, bestillingsnavn)
 # df_filtered_59433 = filter_df_ansforhold(df_ansforhold_59433)
@@ -537,7 +561,47 @@ validate_dataframe(
 # ---------------------------------------------------------------------------- #
 #     Har den timelønnede været ansat mindre end 12 måneder indenfor 8 år?     #
 # ---------------------------------------------------------------------------- #
-def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> None:
+def get_credentials(pam_path, user, fagsystem) -> None:
+    """
+    Internal function to retrieve credentials.
+
+    pam_path = os.getenv("PAM_PATH")
+
+    Define pam_path in an .env file in the root of your project. Add paths like so:
+    SAPSHCUT_PATH=C:/Program Files (x86)/SAP/FrontEnd/SAPgui/sapshcut.exe
+
+    user = getpass.getuser()
+
+    Under the pam_path uri der should be a user.json file with the structure:
+
+    {
+    "ad": { "username": "robot00X", "password": "x" },
+    "opus": { "username": "jrrobot00X", "password": "x" },
+    "rollebaseretindgang": { "username": "jrrobot00X", "password": "x" }
+    }
+    """
+    pass_file = Path(pam_path) / user / f"{user}.json"
+
+    try:
+        with open(pass_file) as file:
+            json_string = json.load(file)
+
+        username = json_string[fagsystem]["username"]
+        password = json_string[fagsystem]["password"]
+
+        return username, password
+
+    except FileNotFoundError:
+        logger.error("File not found", exc_info=True)
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in file", exc_info=True)
+    except Exception:
+        logger.error("An error occurred:", exc_info=True)
+
+    return None
+
+
+def download_all_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> None:
     # initialize
     # hostname = socket.gethostname()
 
@@ -554,115 +618,73 @@ def download_single_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> 
 
     # ansforhold = '03'
     # hovedlonart = '0100; 0140; 0395; 0469; 0516; 0517'
+    username, password = get_credentials(pam_path, user, fagsystem="rollebaseretindgang")
 
-    try:
-        with sync_playwright() as playwright:
-            ri = brk_rpa_utils.start_ri(pam_path = pam_path, user=user, ri_url = ri_url, playwright = playwright)
-            if ri is None:
-                msg = "Failed to start RI"
-                raise Exception(msg)
-            # tuple unpacking:
-            page, context, browser = ri
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=False)
+        context = browser.new_context(viewport={"width": 2560, "height": 1440})
+        page = context.new_page()
+        page.goto(ri_url)
+        page.get_by_placeholder("Brugernavn").click()
+        page.get_by_placeholder("Brugernavn").fill(username)
+        page.get_by_placeholder("Brugernavn").press("Tab")
+        page.get_by_placeholder("Password").click()
+        page.get_by_placeholder("Password").fill(password)
+        page.get_by_role("button", name="Log på").click()
+        page.get_by_text("Lønsagsbehandling").click()
 
-            # add actions to RI
-            try:
-                page.get_by_text("Lønsagsbehandling").click()
+        with page.expect_popup() as page1_info:
+            page.frame_locator('iframe[name="contentAreaFrame"]').frame_locator(
+                'iframe[name="Rapporter til lønkontrol"]'
+            ).get_by_role("link", name="Udbetalte timer på timeløn").click()
+        page1 = page1_info.value
 
-                with page.expect_popup() as page1_info:
-                    page.frame_locator('iframe[name="contentAreaFrame"]').frame_locator(
-                        'iframe[name="Rapporter til lønkontrol"]'
-                    ).get_by_role("link", name="Udbetalte timer på timeløn").click()
+        selector_date_interval = (
+                "#DLG_VARIABLE_vsc_cvl_table_cid2x2 > table > tbody > tr > td:first-child > input"
+        )
 
-                page1 = page1_info.value
+        selector_cvr = "#DLG_VARIABLE_vsc_cvl_table_cid2x6 > table > tbody > tr > td:first-child > input"
 
-                selector_date_interval = (
-                     "#DLG_VARIABLE_vsc_cvl_table_cid2x2 > table > tbody > tr > td:first-child > input"
-                )
+        # click in date field
+        # rapport_variabelinput.frame_locator(
+        #    'iframe[name="iframe_Roundtrip_9223372036563636042"]'
+        # ).locator("#DLG_VARIABLE_vsc_cvl_VAR_3_INPUT_inp").click()
 
-                selector_cvr = "#DLG_VARIABLE_vsc_cvl_table_cid2x6 > table > tbody > tr > td:first-child > input"
+        # input datointerval 8 aar tilbage, som 12.2015 - 11.2023
+        page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(
+            selector_date_interval
+        ).fill(date_interval)
 
-                # click in date field
-                # rapport_variabelinput.frame_locator(
-                #    'iframe[name="iframe_Roundtrip_9223372036563636042"]'
-                # ).locator("#DLG_VARIABLE_vsc_cvl_VAR_3_INPUT_inp").click()
+        # cpr nummer
+        page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(selector_cvr).fill(
+            cpr
+        )
 
-                # input datointerval 8 aar tilbage, som 12.2015 - 11.2023
-                page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(
-                    selector_date_interval
-                ).fill(date_interval)
+        # Click OK
+        page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').get_by_role(
+            "link", name="OK"
+        ).click()
 
-                # cpr nummer
-                page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(selector_cvr).fill(
-                    cpr
-                )
-
-                # Click OK
+        # Donwload
+        with page1.expect_download() as download_info:
+            with page1.expect_popup():
                 page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').get_by_role(
-                    "link", name="OK"
+                    "link", name="Excel uden topinfo"
                 ).click()
+        download = download_info.value
+        download_path = Path(folder_data_session / f"anshistorik_{cpr}.mhtml")
+        download.save_as(download_path)
 
-                # Donwload
-                with page1.expect_download() as download_info:
-                    with page1.expect_popup():
-                        page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').get_by_role(
-                            "link", name="Excel uden topinfo"
-                        ).click()
-                download = download_info.value
-                download_path = Path(folder_data_session / f"anshistorik_{cpr}.mhtml")
-                download.save_as(download_path)
+        if page:
+            page.close()
+        if context:
+            context.close()
+        if browser:
+            browser.close()
 
-            except Exception as e:
-                logger.error(f"An error occurred during page interactions {e}", exc_info=True)
+cpr = os.getenv("CPR")
 
-            finally:
-                if page:
-                    page.close()
-                if context:
-                    context.close()
-                if browser:
-                    browser.close()
-
-    except Exception as e:
-        logger.error(f"An error occurred during playwright setup: {e}", exc_info=True)
-
-
-def process_all_anshistorik(folder_data_session, df):
-    """
-     Mere end 12 -> True
-     Mindre end 12 -> False
-    """
-    df["hourly_more_than_12_months"] = False  # Initialize the column in df
-
-    for cpr in df["cprnr"]:
-        # download single
-        download_single_anshistorik_from_ri(cpr, folder_data_session)
-
-        # parse and read
-        mhtml_path = Path(folder_data_session / f"anshistorik_{cpr}.mhtml")
-        anshistorik = brk_rpa_utils.parse_ri_html_report_to_dataframe(mhtml_path)
-
-        # create a new dataframe from anshistorik where rows are aggregated
-        # into months and the antal column is summed pr month.
-        anshistorik["year_month"] = anshistorik["date"].dt.to_period("M")
-        anshistorik_grouped = anshistorik.groupby("year_month")["antal"].sum().reset_index()
-
-         # Filter rows where antal > 34,67
-        monthly_hour_threshhold = 34.67
-        filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped["antal"] > monthly_hour_threshhold]
-
-        # boolean value
-        eight_year_month_threshhold = 12
-        hourly_more_than_12_months = len(filtered_anshistorik_grouped) > eight_year_month_threshhold
-
-        df.loc[df["cprnr"] == cpr, "hourly_more_than_12_months"] = hourly_more_than_12_months
-
-    return df
-
-
-df = process_all_anshistorik(folder_data_session=folder_data_session, df=df)
-
-df.to_csv(folder_data_session / "output.csv", index=False)
-
+download_all_anshistorik_from_ri(cpr=cpr, folder_data_session=folder_data_session)
 
 # ---------------------------------------------------------------------------- #
 #                       Beregning af timeantal pr. måned                       #
