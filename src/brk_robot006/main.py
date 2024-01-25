@@ -17,7 +17,6 @@ from collections import defaultdict  # to dtype all vars at once
 from pathlib import Path
 
 import brk_rpa_utils
-import html5lib
 import numpy as np
 import pandas as pd
 import pendulum
@@ -458,22 +457,6 @@ def filter_df_ansforhold(df_ansforhold) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-# ---------------- beregning_timeantal_maan_ans er fra slide 15 --------------- #
-# -------- funktionen kører på df_ansforhold, derfor skal den med her, -------- #
-# ---- selvom den først er beskrevet under sektion "beregning af timeantal pr måned" --- #
-def beregning_timeantal_maan_ans(df_ansforhold) -> pd.DataFrame:
-    try:
-        df_timeantal_maan_ans = df_ansforhold.loc[
-            (df_ansforhold["ansfh"] == "01") & (df_ansforhold["penskasn"].notna())
-        ].copy()
-
-        return df_timeantal_maan_ans
-
-    except Exception as e:
-        logger.error(f"Error in filter_df_ansforhold: {e}")
-        return pd.DataFrame()
-
-
 # --------- Funktion til at sortere og udvælge den ældste ansættelse --------- #
 def sort_df_filtered(df_filtered) -> pd.DataFrame:
     try:
@@ -764,8 +747,8 @@ def process_all_anshistorik(folder_data_session, df):
             filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped["antal"] > monthly_hour_threshhold]
 
             # boolean value
-            eight_year_month_threshhold = 12
-            hourly_more_than_12_months = len(filtered_anshistorik_grouped) > eight_year_month_threshhold
+            twelve = 12
+            hourly_more_than_12_months = len(filtered_anshistorik_grouped) > twelve
 
             df.loc[df["cprnr"] == cpr, "hourly_more_than_12_months"] = hourly_more_than_12_months
         else:
@@ -776,10 +759,9 @@ def process_all_anshistorik(folder_data_session, df):
 
 df = process_all_anshistorik(folder_data_session=folder_data_session, df=df)
 
-
-load_dotenv(override=True)
-cpr = os.getenv("CPR")
-
+validate_dataframe(
+    dataframe=df, col_count=20, row_count=persistent_df_row_count, dataframe_name="df", manummer_column="manummer"
+)
 
 # ---------------------------------------------------------------------------- #
 #                       Beregning af timeantal pr. måned                       #
@@ -788,6 +770,57 @@ cpr = os.getenv("CPR")
 # -------------- Beregning af timeantal - månedslønsansættelser -------------- #
 # SLide 15
 # Bruger df_ansforhold (opus) - komplet ift docs
+
+# ---------------- beregning_timeantal_maan_ans er fra slide 15 --------------- #
+# -------- funktionen kører på df_ansforhold, derfor skal den med her, -------- #
+# ---- selvom den først er beskrevet under sektion "beregning af timeantal pr måned" --- #
+
+df_ansforhold = read_single_ansforhold(
+    manummer=40189,
+    folder_data_session=folder_data_session,
+    bestillingsnavn=bestillingsnavn,
+)
+
+
+def beregning_timeantal_maan_ans(df_ansforhold) -> pd.DataFrame:
+    try:
+        df_timeantal_maan_ans = df_ansforhold.loc[
+            (df_ansforhold["ansfh"] == "01") & (df_ansforhold["penskasn"].notna())
+        ].copy()
+
+        # Antal gyldige måneder pr række
+        """I forhold til beregning af gyldige måneder for månedslønsansættelser,
+        hvis startperioden for en måned ikke er den 1. skal måneden ikke tælles med,
+        i dette tilfælde er det næstkommende måned der gælder.
+        Hvis medarbejderen slutter midt i en måned, tælles denne måned med.
+        """
+
+        # Startdato slaæ være den 1. i måneden
+        df_timeantal_maan_ans["startdato"] = pd.to_datetime(df_timeantal_maan_ans["startdato"], format="%d.%m.%Y")
+        df_timeantal_maan_ans["stopdato"] = pd.to_datetime(df_timeantal_maan_ans["stopdato"], format="%d.%m.%Y")
+
+        df_timeantal_maan_ans["startdato"] = df_timeantal_maan_ans["startdato"].dt.to_period("M")
+        df_timeantal_maan_ans["stopdato"] = df_timeantal_maan_ans["stopdato"].dt.to_period("M")
+
+        df_timeantal_maan_ans["antalmaaneder"] = df_timeantal_maan_ans["stopdato"] - df_timeantal_maan_ans["startdato"]
+
+        return df_timeantal_maan_ans
+
+    except Exception as e:
+        logger.error(f"Error in filter_df_ansforhold: {e}")
+        return pd.DataFrame()
+
+
+# -------------------------------- temp start -------------------------------- #
+df_ansforhold_40189 = read_single_ansforhold(
+    manummer=40189,
+    folder_data_session=folder_data_session,
+    bestillingsnavn=bestillingsnavn,
+)
+
+test = beregning_timeantal_maan_ans(df_ansforhold_40189)
+
+# --------------------------------- temp slut -------------------------------- #
 
 # --------------- Beregning af timeantal - timelønsansættelser --------------- #
 # Slide 16
