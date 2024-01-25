@@ -17,15 +17,14 @@ from collections import defaultdict  # to dtype all vars at once
 from pathlib import Path
 
 import brk_rpa_utils
+import html5lib
 import numpy as np
 import pandas as pd
 import pendulum
 from bs4 import BeautifulSoup  # BeautifulSoup4
 from dotenv import load_dotenv
 from loguru import logger
-from playwright.sync_api import Playwright, sync_playwright
-
-# ---------------------------------- Config ---------------------------------- #
+from playwright.sync_api import sync_playwright
 
 server_name = os.environ["COMPUTERNAME"]
 user = getpass.getuser()
@@ -40,12 +39,12 @@ logger.add(log_path, format="{time} {level} {message}", level="DEBUG")
 
 # Right now devmode has no real use.
 
-downloadmode = 0 # Don't download unless running on server with server_prefix
+downloadmode = 0  # Don't download unless running on server with server_prefix
 if server_name.startswith(server_prefix):
     devmode = 0
-    downloadmode = 1 # 0 / 1
+    downloadmode = 1  # 0 / 1
 else:
-    devmode = 1 # (0 / 1)
+    devmode = 1  # (0 / 1)
 
 if devmode == 1 & downloadmode == 1:
     logger.info("starting in devmode with report generation and download")
@@ -62,12 +61,12 @@ else:
 folder_data_session = Path(folder_data / bestillingsnavn)
 
 if downloadmode == 1:
-    session = brk_rpa_utils.start_opus(pam_path=pam_path, user= user, sapshcut_path= sapshcut_path)
+    session = brk_rpa_utils.start_opus(pam_path=pam_path, user=user, sapshcut_path=sapshcut_path)
 
 
 # ---------------------------------------------------------------------------- #
 #                                Rapport trækkes                               #
-#---------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
 def download_report(folder_data, bestillingsnavn, folder_data_session, session) -> None:
     """
     This function downloads a report from OPUS and saves it in a folder named after the current date and time.
@@ -162,6 +161,7 @@ def download_report(folder_data, bestillingsnavn, folder_data_session, session) 
     session.findById("wnd[1]/tbar[0]/btn[0]").press()
     time.sleep(0.5)
 
+
 if downloadmode == 1:
     download_report(folder_data, bestillingsnavn, folder_data_session, session)
 
@@ -175,6 +175,7 @@ def return_to_start_view() -> None:
         time.sleep(0.5)
 
     session.findById("wnd[0]/usr/cntlIMAGE_CONTAINER/shellcont/shell/shellcont[0]/shell").doubleClickNode("F00004")
+
 
 if downloadmode == 1:
     return_to_start_view()
@@ -402,12 +403,10 @@ def download_all_ansforhold(df: pd.DataFrame, folder_data_session: Path, bestill
         # Continue with the next iteration
         continue
 
+
 if downloadmode == 1:
     download_all_ansforhold(
-        df=df,
-        folder_data_session=folder_data_session,
-        bestillingsnavn=bestillingsnavn,
-        session=session
+        df=df, folder_data_session=folder_data_session, bestillingsnavn=bestillingsnavn, session=session
     )
 
 
@@ -601,7 +600,7 @@ def get_credentials(pam_path, user, fagsystem) -> None:
     return None
 
 
-def download_all_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> None:
+def download_all_anshistorik_from_ri(df: pd.DataFrame, folder_data_session: Path) -> None:
     # initialize
     # hostname = socket.gethostname()
 
@@ -621,7 +620,7 @@ def download_all_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> Non
     username, password = get_credentials(pam_path, user, fagsystem="rollebaseretindgang")
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        browser = playwright.chromium.launch(headless=False, slow_mo=50)
         context = browser.new_context(viewport={"width": 2560, "height": 1440})
         page = context.new_page()
         page.goto(ri_url)
@@ -639,9 +638,7 @@ def download_all_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> Non
             ).get_by_role("link", name="Udbetalte timer på timeløn").click()
         page1 = page1_info.value
 
-        selector_date_interval = (
-                "#DLG_VARIABLE_vsc_cvl_table_cid2x2 > table > tbody > tr > td:first-child > input"
-        )
+        selector_date_interval = "#DLG_VARIABLE_vsc_cvl_table_cid2x2 > table > tbody > tr > td:first-child > input"
 
         selector_cvr = "#DLG_VARIABLE_vsc_cvl_table_cid2x6 > table > tbody > tr > td:first-child > input"
 
@@ -651,29 +648,32 @@ def download_all_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> Non
         # ).locator("#DLG_VARIABLE_vsc_cvl_VAR_3_INPUT_inp").click()
 
         # input datointerval 8 aar tilbage, som 12.2015 - 11.2023
-        page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(
-            selector_date_interval
-        ).fill(date_interval)
-
-        # cpr nummer
-        page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(selector_cvr).fill(
-            cpr
+        page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(selector_date_interval).fill(
+            date_interval
         )
 
-        # Click OK
-        page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').get_by_role(
-            "link", name="OK"
-        ).click()
+        for cpr in df["cprnr"]:
+            page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').locator(selector_cvr).fill(cpr)
 
-        # Donwload
-        with page1.expect_download() as download_info:
-            with page1.expect_popup():
-                page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').get_by_role(
-                    "link", name="Excel uden topinfo"
-                ).click()
-        download = download_info.value
-        download_path = Path(folder_data_session / f"anshistorik_{cpr}.mhtml")
-        download.save_as(download_path)
+            # Click OK
+            page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').get_by_role(
+                "link", name="OK"
+            ).click()
+
+            # Donwload
+            with page1.expect_download() as download_info:
+                with page1.expect_popup():
+                    page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').get_by_role(
+                        "link", name="Excel uden topinfo"
+                    ).click()
+            download = download_info.value
+            download_path = Path(folder_data_session / f"anshistorik_{cpr}.mhtml")
+            download.save_as(download_path)
+
+            # back to variabelskærm
+            page1.frame_locator('iframe[name="iframe_Roundtrip_9223372036563636042"]').get_by_role(
+                "link", name="Variabelskærm"
+            ).click()
 
         if page:
             page.close()
@@ -682,14 +682,108 @@ def download_all_anshistorik_from_ri(cpr: str, folder_data_session: Path) -> Non
         if browser:
             browser.close()
 
+
+if downloadmode == 1:
+    download_all_anshistorik_from_ri(df=df, folder_data_session=folder_data_session)
+
+
+def parse_ri_html_report_to_dataframe(mhtml_path) -> None:
+    """
+    Parses an mhtml file downloaded from Rollobaseret Indgang.
+    The default download calls the file xls, but it is a kind of html file.
+
+    ## Usage
+    mhtml_path = Path(folder_data_session / 'test.html')
+
+    df_mhtml = parse_ri_html_report_to_dataframe(mhtml_path)
+    """
+    # Read MHTML file
+    with open(mhtml_path, encoding="utf-8") as file:
+        content = file.read()
+
+    # Find the HTML part of the file
+    matches = re.search(r"<html.*<\/html>", content, re.DOTALL)
+    if not matches:
+        msg = "No HTML content found in the file"
+        raise ValueError(msg)
+    html_content = matches.group(0)
+
+    # Parse the HTML content using BeautifulSoup
+    soup = BeautifulSoup(html_content, features="html.parser")  # "html.parser"
+
+    # Find all tables within the parsed HTML
+    tables = soup.find_all("table")
+    if not tables:
+        msg = "No tables found in the HTML content"
+        raise ValueError(msg)
+
+    last_table = tables[-1]
+
+    if "Ingen data fundet til visning" in str(last_table):
+        return pd.DataFrame()
+    # Convert the largest HTML table to a pandas DataFrame
+    try:
+        # returns a list of DataFrames
+        df_mhtml = pd.read_html(io.StringIO(str(last_table)), decimal=",", thousands=".", header=None)
+    except Exception:
+        msg = "Failed to parse the last table into a DataFrame"
+        logger.error(msg, exc_info=True)
+
+    df_mhtml = df_mhtml[0]
+    df_mhtml.columns = df_mhtml.iloc[0]
+    df_mhtml = df_mhtml.drop(0)
+    df_mhtml.reset_index(drop=True, inplace=True)
+    df_mhtml.rename(columns={"Slut F-periode": "date", "Lønart": "lonart", "Antal": "antal"}, inplace=True)
+
+    # Convert 'date' column to datetime
+    df_mhtml["date"] = pd.to_datetime(df_mhtml["date"], format="%d%m%Y")
+    df_mhtml["antal"] = pd.to_numeric(df_mhtml["antal"])
+    return df_mhtml
+
+
+def process_all_anshistorik(folder_data_session, df):
+    """
+    Mere end 12 -> True
+    Mindre end 12 -> False
+    """
+    df["hourly_more_than_12_months"] = ""  # Initialize the column in df. TODO: test with empty string init.
+
+    for cpr in df["cprnr"]:
+        # parse and read
+        mhtml_path = Path(folder_data_session / f"anshistorik_{cpr}.mhtml")
+        anshistorik = parse_ri_html_report_to_dataframe(mhtml_path)
+
+        if anshistorik is not None and not anshistorik.empty:
+            # create a new dataframe from anshistorik where rows are aggregated
+            # into months and the antal column is summed pr month.
+            anshistorik["year_month"] = anshistorik["date"].dt.to_period("M")
+            anshistorik_grouped = anshistorik.groupby("year_month")["antal"].sum().reset_index()
+
+            # Filter rows where antal > 34,67
+            monthly_hour_threshhold = 34.67
+            filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped["antal"] > monthly_hour_threshhold]
+
+            # boolean value
+            eight_year_month_threshhold = 12
+            hourly_more_than_12_months = len(filtered_anshistorik_grouped) > eight_year_month_threshhold
+
+            df.loc[df["cprnr"] == cpr, "hourly_more_than_12_months"] = hourly_more_than_12_months
+        else:
+            df.loc[df["cprnr"] == cpr, "hourly_more_than_12_months"] = False
+
+    return df
+
+
+df = process_all_anshistorik(folder_data_session=folder_data_session, df=df)
+
+
+load_dotenv(override=True)
 cpr = os.getenv("CPR")
 
-download_all_anshistorik_from_ri(cpr=cpr, folder_data_session=folder_data_session)
 
 # ---------------------------------------------------------------------------- #
 #                       Beregning af timeantal pr. måned                       #
 # ---------------------------------------------------------------------------- #
-
 
 # -------------- Beregning af timeantal - månedslønsansættelser -------------- #
 # SLide 15
