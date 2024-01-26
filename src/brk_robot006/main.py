@@ -783,32 +783,36 @@ df_ansforhold = read_single_ansforhold(
 
 
 def beregning_timeantal_maan_ans(df_ansforhold) -> pd.DataFrame:
-    try:
-        df_timeantal_maan_ans = df_ansforhold.loc[
-            (df_ansforhold["ansfh"] == "01") & (df_ansforhold["penskasn"].notna())
-        ].copy()
+    """I forhold til beregning af gyldige måneder for månedslønsansættelser,
+    hvis startperioden for en måned ikke er den 1. skal måneden ikke tælles med,
+    i dette tilfælde er det næstkommende måned der gælder.
+    Hvis medarbejderen slutter midt i en måned, tælles denne måned med.
+    """
 
-        # Antal gyldige måneder pr række
-        """I forhold til beregning af gyldige måneder for månedslønsansættelser,
-        hvis startperioden for en måned ikke er den 1. skal måneden ikke tælles med,
-        i dette tilfælde er det næstkommende måned der gælder.
-        Hvis medarbejderen slutter midt i en måned, tælles denne måned med.
-        """
+    df_timeantal_maan_ans = df_ansforhold.loc[
+        (df_ansforhold["ansfh"] == "01") & (df_ansforhold["penskasn"].notna())
+    ].copy()
 
-        # Startdato slaæ være den 1. i måneden
-        df_timeantal_maan_ans["startdato"] = pd.to_datetime(df_timeantal_maan_ans["startdato"], format="%d.%m.%Y")
-        df_timeantal_maan_ans["stopdato"] = pd.to_datetime(df_timeantal_maan_ans["stopdato"], format="%d.%m.%Y")
+    # Startdato slaæ være den 1. i måneden
+    df_timeantal_maan_ans["startdato"] = pd.to_datetime(df_timeantal_maan_ans["startdato"], format="%d.%m.%Y")
+    df_timeantal_maan_ans["stopdato"] = pd.to_datetime(df_timeantal_maan_ans["stopdato"], format="%d.%m.%Y")
 
-        df_timeantal_maan_ans["startdato"] = df_timeantal_maan_ans["startdato"].dt.to_period("M")
-        df_timeantal_maan_ans["stopdato"] = df_timeantal_maan_ans["stopdato"].dt.to_period("M")
+    # check if startdato is the first of the month
+    df_timeantal_maan_ans["startdato_check"] = df_timeantal_maan_ans["startdato"].dt.day == 1
 
-        df_timeantal_maan_ans["antalmaaneder"] = df_timeantal_maan_ans["stopdato"] - df_timeantal_maan_ans["startdato"]
+    df_timeantal_maan_ans["startdato_year_month"] = df_timeantal_maan_ans["startdato"].dt.to_period("M")
+    df_timeantal_maan_ans["stopdato_year_month"] = df_timeantal_maan_ans["stopdato"].dt.to_period("M")
 
-        return df_timeantal_maan_ans
+    # If startdato_check is False, then add one month to startdato_year_month
+    df_timeantal_maan_ans.loc[df_timeantal_maan_ans["startdato_check"] == False, "startdato_year_month"] = (
+        df_timeantal_maan_ans["startdato_year_month"] + 1
+    )
 
-    except Exception as e:
-        logger.error(f"Error in filter_df_ansforhold: {e}")
-        return pd.DataFrame()
+    # Antal gyldige måneder pr række stopdato_year_month - startdato_year_month
+    df_timeantal_maan_ans["antal_maaneder"] = (
+        df_timeantal_maan_ans["stopdato_year_month"] - df_timeantal_maan_ans["startdato_year_month"]
+    )
+    return df_timeantal_maan_ans
 
 
 # -------------------------------- temp start -------------------------------- #
