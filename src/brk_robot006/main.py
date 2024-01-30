@@ -472,9 +472,54 @@ def sort_df_filtered(df_filtered) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# -- Funktion der tjekker om der er mere end 12 gyldige måneder i ansforlob -- #
+def over_12_gyldige_ansfh01(df_filtered) -> bool:
+    """I forhold til beregning af gyldige måneder for månedslønsansættelser,
+    hvis startperioden for en måned ikke er den 1. skal måneden ikke tælles med,
+    i dette tilfælde er det næstkommende måned der gælder.
+    Hvis medarbejderen slutter midt i en måned, tælles denne måned med.
+    """
+
+    df_over_12_gyldige_ansfh01 = df_filtered.copy()
+
+    # Startdato skal være den 1. i måneden. Stopdata kan være hvilken som helst dag i måneden.
+    df_over_12_gyldige_ansfh01["startdato"] = pd.to_datetime(df_over_12_gyldige_ansfh01["startdato"], format="%d.%m.%Y")
+
+    # if stopdato year is 9999, then set stopdato to today
+    df_over_12_gyldige_ansfh01.loc[
+        df_over_12_gyldige_ansfh01["stopdato"].str[-4:] == "9999", "stopdato"
+    ] = pendulum.now().strftime("%d.%m.%Y")
+
+    df_over_12_gyldige_ansfh01["stopdato"] = pd.to_datetime(df_over_12_gyldige_ansfh01["stopdato"], format="%d.%m.%Y")
+
+    # check if startdato is the first of the month
+    df_over_12_gyldige_ansfh01["startdato_check"] = df_over_12_gyldige_ansfh01["startdato"].dt.day == 1
+
+    df_over_12_gyldige_ansfh01["startdato_year_month"] = df_over_12_gyldige_ansfh01["startdato"].dt.to_period("M")
+    df_over_12_gyldige_ansfh01["stopdato_year_month"] = df_over_12_gyldige_ansfh01["stopdato"].dt.to_period("M")
+
+    # If startdato_check is False, then add one month to startdato_year_month
+    df_over_12_gyldige_ansfh01.loc[df_over_12_gyldige_ansfh01["startdato_check"] == False, "startdato_year_month"] = (  # noqa: E712
+        df_over_12_gyldige_ansfh01["startdato_year_month"] + 1
+    )
+
+    # Antal gyldige måneder pr række stopdato_year_month - startdato_year_month
+    df_over_12_gyldige_ansfh01["antal_maaneder"] = df_over_12_gyldige_ansfh01["stopdato_year_month"].astype(
+        "int64"
+    ) - df_over_12_gyldige_ansfh01["startdato_year_month"].astype("int64")
+
+    # Sum the number of months
+    sum_antal_maaneder = df_over_12_gyldige_ansfh01["antal_maaneder"].sum()
+
+    return sum_antal_maaneder
+
+
 # --- Kør de 3 funktioner (read, filter, sort) i et loop over alle manumre --- #
 # ---- Hvis medarbejder har en linje, svarer det til en True value i result --- #
 # ---------- all_rows indeholder alle df_sorted samlet i et datarame --------- #
+
+
+# ------------- temp try to add bool for over_12_gyldige_ansfh01 start ------------- #
 def process_all_ansforhold(df: pd.DataFrame, folder_data_session: Path, bestillingsnavn: str) -> pd.DataFrame:
     """
     Loops over manummer_list and runs all the single functions.
@@ -482,42 +527,53 @@ def process_all_ansforhold(df: pd.DataFrame, folder_data_session: Path, bestilli
     # global all_rows
     # all_rows = []  # List to store the single-row DataFrames, mostly for debugging purposes
     manummer_list = (df["manummer"]).tolist()
-    df["oprettet_pension_maaned"] = False  # Initialize the column in df
+
+    # Initialize columns in df
+    df["oprettet_pension_maaned"] = ""
+    df["antal_gyldige_maaneder_ansfh01"] = ""
+    df["more_than_12_months_ansfh01"] = ""
 
     for manummer in manummer_list:
-        try:
-            # Read and process the downloaded data
-            df_ansforhold = read_single_ansforhold(manummer, folder_data_session, bestillingsnavn)
+        # try:
+        # Read and process the downloaded data
+        df_ansforhold = read_single_ansforhold(manummer, folder_data_session, bestillingsnavn)
 
-            validate_dataframe(
-                dataframe=df_ansforhold,
-                col_count=20,
-                dataframe_name="df_ansforhold",
-                manummer_column="manr",
-            )
-            # Filter and sort the DataFrame
-            df_filtered = filter_df_ansforhold(df_ansforhold)
-            df_sorted = sort_df_filtered(df_filtered)
+        # Filter and sort the DataFrame
+        df_filtered = filter_df_ansforhold(df_ansforhold)
+        df_sorted = sort_df_filtered(df_filtered)
 
-            # Append the sorted DataFrame to the list
-            if df_sorted.columns[0] is np.nan:
-                df_sorted = df_sorted.drop(df_sorted.columns[0], axis=1)
-            # all_rows.append(df_sorted)
+        # Append the sorted DataFrame to the list
+        if df_sorted.columns[0] is np.nan:
+            df_sorted = df_sorted.drop(df_sorted.columns[0], axis=1)
 
-            bull = len(df_sorted) == 1
-            # Update df directly depending on if df_sorted has exactly one row
-            df.loc[df["manummer"] == manummer, "oprettet_pension_maaned"] = bull
+        # all_rows.append(df_sorted)
 
-        except Exception as e:
-            logger.error(f"Error processing manummer {manummer}: {e}")
-            # Continue with the next iteration
-            continue
+        bull = len(df_sorted) == 1
+
+        # Update df directly depending on if df_sorted has exactly one row
+        df.loc[df["manummer"] == manummer, "oprettet_pension_maaned"] = bull
+
+        # Check if there are more than 12 gyldige ansfh01
+        sum_antal_maaneder = over_12_gyldige_ansfh01(df_filtered)
+        df.loc[df["manummer"] == manummer, "antal_gyldige_maaneder_ansfh01"] = sum_antal_maaneder
+
+        # Check if there are more than 12 gyldige ansfh01
+        twelve = 12
+        more_than_12_months_ansfh01 = sum_antal_maaneder > twelve
+        df.loc[df["manummer"] == manummer, "more_than_12_months_ansfh01"] = more_than_12_months_ansfh01
+
+    # except Exception as e:
+    # logger.error(f"Error processing manummer {manummer}: {e}", exc_info=True)
+    # Continue with the next iteration
+    # continue
 
     # Concatenate all single-row DataFrames into one DataFrame
     # all_rows = pd.concat(all_rows, ignore_index=False)
 
     return df
 
+
+# ------------- temp try to add bool for over_12_gyldige_ansfh01 slut -------------- #
 
 df = process_all_ansforhold(
     df=df,
@@ -526,7 +582,7 @@ df = process_all_ansforhold(
 )
 
 validate_dataframe(
-    dataframe=df, col_count=19, row_count=persistent_df_row_count, dataframe_name="df", manummer_column="manummer"
+    dataframe=df, col_count=21, row_count=persistent_df_row_count, dataframe_name="df", manummer_column="manummer"
 )
 
 
@@ -729,7 +785,8 @@ def process_all_anshistorik(folder_data_session, df):
     Mere end 12 -> True
     Mindre end 12 -> False
     """
-    df["hourly_more_than_12_months"] = ""  # Initialize the column in df. TODO: test with empty string init.
+    df["antal_gyldige_maaneder_ansfh03"] = ""
+    df["more_than_12_months_ansfh03"] = ""  # Initialize the column in df. TODO: test with empty string init.
 
     for cpr in df["cprnr"]:
         # parse and read
@@ -746,13 +803,16 @@ def process_all_anshistorik(folder_data_session, df):
             monthly_hour_threshhold = 34.67
             filtered_anshistorik_grouped = anshistorik_grouped[anshistorik_grouped["antal"] > monthly_hour_threshhold]
 
+            antal_gyldige_maaneder_ansfh03 = len(filtered_anshistorik_grouped)
             # boolean value
             twelve = 12
-            hourly_more_than_12_months = len(filtered_anshistorik_grouped) > twelve
+            more_than_12_months_ansfh03 = len(filtered_anshistorik_grouped) > twelve
 
-            df.loc[df["cprnr"] == cpr, "hourly_more_than_12_months"] = hourly_more_than_12_months
+            df.loc[df["cprnr"] == cpr, "more_than_12_months_ansfh03"] = more_than_12_months_ansfh03
+            df.loc[df["cprnr"] == cpr, "antal_gyldige_maaneder_ansfh03"] = antal_gyldige_maaneder_ansfh03
         else:
-            df.loc[df["cprnr"] == cpr, "hourly_more_than_12_months"] = False
+            df.loc[df["cprnr"] == cpr, "more_than_12_months_ansfh03"] = ""
+            df.loc[df["cprnr"] == cpr, "antal_gyldige_maaneder_ansfh03"] = ""
 
     return df
 
@@ -760,7 +820,7 @@ def process_all_anshistorik(folder_data_session, df):
 df = process_all_anshistorik(folder_data_session=folder_data_session, df=df)
 
 validate_dataframe(
-    dataframe=df, col_count=20, row_count=persistent_df_row_count, dataframe_name="df", manummer_column="manummer"
+    dataframe=df, col_count=23, row_count=persistent_df_row_count, dataframe_name="df", manummer_column="manummer"
 )
 
 # ---------------------------------------------------------------------------- #
@@ -775,56 +835,9 @@ validate_dataframe(
 # -------- funktionen kører på df_ansforhold, derfor skal den med her, -------- #
 # ---- selvom den først er beskrevet under sektion "beregning af timeantal pr måned" --- #
 
-df_ansforhold = read_single_ansforhold(
-    manummer=40189,
-    folder_data_session=folder_data_session,
-    bestillingsnavn=bestillingsnavn,
-)
 
+# ["startdato", "stopdato", "startdato_year_month", "makrs", "lnklasse", "stopdato_year_month", "antal_maaneder"]
 
-def beregning_timeantal_maan_ans(df_ansforhold) -> pd.DataFrame:
-    """I forhold til beregning af gyldige måneder for månedslønsansættelser,
-    hvis startperioden for en måned ikke er den 1. skal måneden ikke tælles med,
-    i dette tilfælde er det næstkommende måned der gælder.
-    Hvis medarbejderen slutter midt i en måned, tælles denne måned med.
-    """
-
-    df_timeantal_maan_ans = df_ansforhold.loc[
-        (df_ansforhold["ansfh"] == "01") & (df_ansforhold["penskasn"].notna())
-    ].copy()
-
-    # Startdato slaæ være den 1. i måneden
-    df_timeantal_maan_ans["startdato"] = pd.to_datetime(df_timeantal_maan_ans["startdato"], format="%d.%m.%Y")
-    df_timeantal_maan_ans["stopdato"] = pd.to_datetime(df_timeantal_maan_ans["stopdato"], format="%d.%m.%Y")
-
-    # check if startdato is the first of the month
-    df_timeantal_maan_ans["startdato_check"] = df_timeantal_maan_ans["startdato"].dt.day == 1
-
-    df_timeantal_maan_ans["startdato_year_month"] = df_timeantal_maan_ans["startdato"].dt.to_period("M")
-    df_timeantal_maan_ans["stopdato_year_month"] = df_timeantal_maan_ans["stopdato"].dt.to_period("M")
-
-    # If startdato_check is False, then add one month to startdato_year_month
-    df_timeantal_maan_ans.loc[df_timeantal_maan_ans["startdato_check"] == False, "startdato_year_month"] = (
-        df_timeantal_maan_ans["startdato_year_month"] + 1
-    )
-
-    # Antal gyldige måneder pr række stopdato_year_month - startdato_year_month
-    df_timeantal_maan_ans["antal_maaneder"] = (
-        df_timeantal_maan_ans["stopdato_year_month"] - df_timeantal_maan_ans["startdato_year_month"]
-    )
-    return df_timeantal_maan_ans
-
-
-# -------------------------------- temp start -------------------------------- #
-df_ansforhold_40189 = read_single_ansforhold(
-    manummer=40189,
-    folder_data_session=folder_data_session,
-    bestillingsnavn=bestillingsnavn,
-)
-
-test = beregning_timeantal_maan_ans(df_ansforhold_40189)
-
-# --------------------------------- temp slut -------------------------------- #
 
 # --------------- Beregning af timeantal - timelønsansættelser --------------- #
 # Slide 16
