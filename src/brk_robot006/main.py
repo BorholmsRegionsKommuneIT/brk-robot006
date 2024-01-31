@@ -438,6 +438,15 @@ def read_single_ansforhold(manummer: str, folder_data_session: Path, bestillings
         return pd.DataFrame()
 
 
+# ----------- Read input data used to filter makreds and lonklasse ----------- #
+input_dfs = {}
+
+for file_path in folder_data.glob("input*.csv"):
+    key = file_path.stem
+    # Reading the CSV file and storing it in the dictionary
+    input_dfs[key] = pd.read_csv(filepath_or_buffer=file_path, sep=";")
+
+
 # ----------- Funktion til at filtrere et enkelt ansættelsesforløb ----------- #
 def filter_df_ansforhold(df_ansforhold) -> pd.DataFrame:
     try:
@@ -450,11 +459,30 @@ def filter_df_ansforhold(df_ansforhold) -> pd.DataFrame:
             & (df_ansforhold["penskasn"].notna())
         ].copy()
 
+        input_makreds = input_dfs["input_makreds"].to_numpy().flatten().tolist()
+        # remove rows where makrs is in input_makreds
+        df_filtered = df_filtered.loc[~df_filtered["makrs"].isin(input_makreds)]
+
+        # remove rows where lonklasse is in input_lonklasse
+        input_lonklasse = input_dfs["input_lonklasse"].to_numpy().flatten().tolist()
+        df_filtered = df_filtered.loc[~df_filtered["lnklasse"].isin(input_lonklasse)]
+
         return df_filtered
 
     except Exception as e:
         logger.error(f"Error in filter_df_ansforhold: {e}")
         return pd.DataFrame()
+
+
+# -------------- remove rows where lonklasse is in the intervals ------------- #
+input_makreds_intervaller = input_dfs["input_makreds_intervaller"]
+
+
+def filter_lnklasse(df_filtered, input_makreds_intervaller):
+    pass
+
+    # Filter df_filtered
+    return df_filtered[~df_filtered["lnklasse"].apply(lambda x: is_in_interval(x, intervals))]
 
 
 # --------- Funktion til at sortere og udvælge den ældste ansættelse --------- #
@@ -519,7 +547,6 @@ def over_12_gyldige_ansfh01(df_filtered) -> bool:
 # ---------- all_rows indeholder alle df_sorted samlet i et datarame --------- #
 
 
-# ------------- temp try to add bool for over_12_gyldige_ansfh01 start ------------- #
 def process_all_ansforhold(df: pd.DataFrame, folder_data_session: Path, bestillingsnavn: str) -> pd.DataFrame:
     """
     Loops over manummer_list and runs all the single functions.
@@ -540,6 +567,7 @@ def process_all_ansforhold(df: pd.DataFrame, folder_data_session: Path, bestilli
 
         # Filter and sort the DataFrame
         df_filtered = filter_df_ansforhold(df_ansforhold)
+        df_filtered = filter_lnklasse(df_filtered, input_makreds_intervaller)
         df_sorted = sort_df_filtered(df_filtered)
 
         # Append the sorted DataFrame to the list
@@ -571,6 +599,15 @@ def process_all_ansforhold(df: pd.DataFrame, folder_data_session: Path, bestilli
     # all_rows = pd.concat(all_rows, ignore_index=False)
 
     return df
+
+
+# -------------------------------- test start -------------------------------- #
+
+# Function filter_lnklasse in scrachpad
+# test_data_53183 = read_single_ansforhold("test", folder_data_session, bestillingsnavn)
+# filter_lnklasse(test_data_53183, input_makreds_intervaller)
+
+# --------------------------------- test slut -------------------------------- #
 
 
 # ------------- temp try to add bool for over_12_gyldige_ansfh01 slut -------------- #
@@ -780,6 +817,10 @@ def parse_ri_html_report_to_dataframe(mhtml_path) -> None:
     return df_mhtml
 
 
+# load_dotenv(override=True)
+# cpr = os.getenv("CPR")
+
+
 def process_all_anshistorik(folder_data_session, df):
     """
     Mere end 12 -> True
@@ -794,9 +835,19 @@ def process_all_anshistorik(folder_data_session, df):
         anshistorik = parse_ri_html_report_to_dataframe(mhtml_path)
 
         if anshistorik is not None and not anshistorik.empty:
-            # create a new dataframe from anshistorik where rows are aggregated
-            # into months and the antal column is summed pr month.
-            anshistorik["year_month"] = anshistorik["date"].dt.to_period("M")
+            # remove rows where
+
+            # Create a year_month column, depending on the date column.
+            # If date is between day 16 and 31, then set year_month to the next month.
+            # If date is between day 1 and 15, then set year_month to the current month.
+            def create_year_month(date_column):
+                year_month = pd.to_datetime(date_column).dt.to_period("M")
+                day = pd.to_datetime(date_column).dt.day
+                year_month = year_month.where(day > 15, year_month + 1)  # noqa: PLR2004
+                return year_month
+
+            # Example usage:
+            anshistorik["year_month"] = create_year_month(anshistorik["date"])
             anshistorik_grouped = anshistorik.groupby("year_month")["antal"].sum().reset_index()
 
             # Filter rows where antal > 34,67
@@ -822,23 +873,3 @@ df = process_all_anshistorik(folder_data_session=folder_data_session, df=df)
 validate_dataframe(
     dataframe=df, col_count=23, row_count=persistent_df_row_count, dataframe_name="df", manummer_column="manummer"
 )
-
-# ---------------------------------------------------------------------------- #
-#                       Beregning af timeantal pr. måned                       #
-# ---------------------------------------------------------------------------- #
-
-# -------------- Beregning af timeantal - månedslønsansættelser -------------- #
-# SLide 15
-# Bruger df_ansforhold (opus) - komplet ift docs
-
-# ---------------- beregning_timeantal_maan_ans er fra slide 15 --------------- #
-# -------- funktionen kører på df_ansforhold, derfor skal den med her, -------- #
-# ---- selvom den først er beskrevet under sektion "beregning af timeantal pr måned" --- #
-
-
-# ["startdato", "stopdato", "startdato_year_month", "makrs", "lnklasse", "stopdato_year_month", "antal_maaneder"]
-
-
-# --------------- Beregning af timeantal - timelønsansættelser --------------- #
-# Slide 16
-# Bruger anshistorik (RI) - mangelful ift docs
