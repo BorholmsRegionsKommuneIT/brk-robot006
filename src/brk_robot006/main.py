@@ -2,6 +2,7 @@
 Robot006
 """
 
+
 # ----------------------------------- Libs ----------------------------------- #
 import getpass
 
@@ -467,22 +468,30 @@ def filter_df_ansforhold(df_ansforhold) -> pd.DataFrame:
         input_lonklasse = input_dfs["input_lonklasse"].to_numpy().flatten().tolist()
         df_filtered = df_filtered.loc[~df_filtered["lnklasse"].isin(input_lonklasse)]
 
+        # remove rows where lonklasse in in the intervals
+        # 1-9990-000 - 1-9999-999
+        # 7-4001-000 - 7-4001-999
+        # 7-9000-000 - 7-9999-999
+        def check_if_lonklasse_ineligible(lonklasse: str) -> bool:
+            parts = [int(part) for part in lonklasse.split("-")]
+
+            if parts[0] == 1:
+                return 9990 <= parts[1] <= 9999
+            if parts[0] == 7:
+                if str(parts[1])[0] == "4":
+                    return True
+                if str(parts[1])[0] == "9":
+                    return True
+            else:
+                return False
+
+        df_filtered = df_filtered[~df_filtered["lnklasse"].apply(check_if_lonklasse_ineligible)]
+
         return df_filtered
 
     except Exception as e:
         logger.error(f"Error in filter_df_ansforhold: {e}")
         return pd.DataFrame()
-
-
-# -------------- remove rows where lonklasse is in the intervals ------------- #
-input_makreds_intervaller = input_dfs["input_makreds_intervaller"]
-
-
-def filter_lnklasse(df_filtered, input_makreds_intervaller):
-    pass
-
-    # Filter df_filtered
-    return df_filtered[~df_filtered["lnklasse"].apply(lambda x: is_in_interval(x, intervals))]
 
 
 # --------- Funktion til at sortere og udvælge den ældste ansættelse --------- #
@@ -567,7 +576,7 @@ def process_all_ansforhold(df: pd.DataFrame, folder_data_session: Path, bestilli
 
         # Filter and sort the DataFrame
         df_filtered = filter_df_ansforhold(df_ansforhold)
-        df_filtered = filter_lnklasse(df_filtered, input_makreds_intervaller)
+
         df_sorted = sort_df_filtered(df_filtered)
 
         # Append the sorted DataFrame to the list
@@ -817,8 +826,8 @@ def parse_ri_html_report_to_dataframe(mhtml_path) -> None:
     return df_mhtml
 
 
-# load_dotenv(override=True)
-# cpr = os.getenv("CPR")
+load_dotenv(override=True)
+cpr = os.getenv("CPR")
 
 
 def process_all_anshistorik(folder_data_session, df):
@@ -873,3 +882,14 @@ df = process_all_anshistorik(folder_data_session=folder_data_session, df=df)
 validate_dataframe(
     dataframe=df, col_count=23, row_count=persistent_df_row_count, dataframe_name="df", manummer_column="manummer"
 )
+
+
+# Kontroller: Er der udbetalt timeløn på 34,66 timer, eller over, i samme periode(r)
+# som månedsløn, tælles lønperioden kun én gang!
+
+# Beregn dato for pension: den "12 måned + 1"
+
+# måske problem: "er medarbejder oprettet med pension på månedsløn" udføres efter alle filtrene er kørt i gennem.
+
+# Lektie til næste robot. Lav en processbeskrivelse der både kører rækkevis (personvis) og kolonnevis (funktionsvis)
+# Lav også en beskrivelse af datastrukturens input og output. Fx tabel.shape
